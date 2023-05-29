@@ -1,0 +1,27 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug",
+            "args": ["/home/laughner/scratch/oco2_LtCO2_230224_B11014Ar_230405191336s.nc4",
+                     "/home/laughner/scratch/oco3_LtCO2_230224_B10400Br_230414162256s.nc4",
+                     "groups_test.nc4",
+                     "-i", "test_output.nc4"],
+            "cwd": "${workspaceFolder}",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=oco-lite-matchup"
+                ],
+                "filter": {
+                    "kind": "bin"
+                }
+            }
+        }
+    ]
+}
