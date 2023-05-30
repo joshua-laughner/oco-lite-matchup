@@ -77,6 +77,15 @@ impl OcoMatches {
         "distance"
     }
 
+    pub fn ordered_oco2_indices(&self) -> Vec<u64> {
+        let mut oco2inds: Vec<u64> = self.indices
+            .keys()
+            .map(|&k| k)
+            .collect();
+        oco2inds.sort();
+        oco2inds
+    }
+
     pub fn from_nc_group(grp: &netcdf::Group) -> Result<Self, MatchupError> {
         let out_file = PathBuf::from("?");
         
@@ -176,6 +185,8 @@ impl OcoMatches {
         let mut var = grp.add_variable::<T>(varname, &["oco2_match", "oco3_match"])
             .map_err(|e| MatchupError::from_nc_error(e, file.clone()))?;
         var.set_fill_value(fill_value)
+            .map_err(|e| MatchupError::from_nc_error(e, file.clone()))?;
+        var.compression(9, true)
             .map_err(|e| MatchupError::from_nc_error(e, file.clone()))?;
 
         for (i, k) in keys.iter().enumerate() {
@@ -298,6 +309,12 @@ impl OcoMatchGroups {
     }
 
     fn setup_nc_group<'f>(&'f self, ds: &'f mut netcdf::MutableFile, group_name: Option<&str>, oco2_lite_file: &Path, oco3_lite_file: &Path) -> Result<netcdf::GroupMut, MatchupError> {
+        // Convert the lite files to path strings and get checksums, we'll make these attributes later
+        let oco2_file_string = format!("{}", oco2_lite_file.display());
+        let oco2_checksum = utils::file_sha256(oco2_lite_file)?;
+        let oco3_file_string = format!("{}", oco2_lite_file.display());
+        let oco3_checksum = utils::file_sha256(oco3_lite_file)?;
+        
         // Get the units and long name from the OCO lite files
         let oco2_ds = netcdf::open(oco2_lite_file)
             .map_err(|e| MatchupError::from_nc_error(e, oco2_lite_file.to_owned()))?;
@@ -353,6 +370,15 @@ impl OcoMatchGroups {
             }
         }
 
+        grp.add_attribute("oco2_lite_file_path", oco2_file_string)
+            .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
+        grp.add_attribute("oco2_lite_file_sha256", oco2_checksum)
+            .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
+        grp.add_attribute("oco3_lite_file_path", oco3_file_string)
+            .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
+        grp.add_attribute("oco3_lite_file_sha256", oco3_checksum)
+            .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
+
         Ok(grp)
     }
 }
@@ -363,7 +389,7 @@ pub fn match_oco3_to_oco2(oco2: &OcoGeo, oco3: &OcoGeo, max_dist: f32) -> OcoMat
 
     let pb2 = setup_oco2_progress(oco2.num_soundings());
 
-    // TODO: remove progress bar for OCO-3 (not really needed) and try parallelizing this
+    // TODO: try parallelizing this
     for (idx_oco2, (&lon_oco2, &lat_oco2)) in oco2.iter_latlon().enumerate() {
         let idx_oco2 = idx_oco2 as u64;
         pb2.set_position(idx_oco2 + 1);
@@ -395,8 +421,12 @@ fn setup_oco2_progress(n_oco2: u64) -> ProgressBar {
 
 pub fn identify_groups_from_matched_soundings(matched_soundings: OcoMatches) -> OcoMatchGroups {
     let mut match_sets: Vec<(HashSet<u64>, HashSet<u64>)> = Vec::new();
+    // It's important to iterate over ordered keys: when I let this be unordered
+    let ordered_keys = matched_soundings.ordered_oco2_indices();
 
-    for (oco2_idx, oco3_row) in matched_soundings.indices.into_iter() {
+    for oco2_idx in ordered_keys {
+        let oco3_row = matched_soundings.indices.get(&oco2_idx)
+            .expect("Tried to get a row of OCO-3 indices for an OCO-2 index that does not exist");
         let mut matched = false;
         for (oco2_idx_set, oco3_idx_set) in match_sets.iter_mut() {
             if oco3_row.iter().any(|i| oco3_idx_set.contains(i)) {
@@ -409,7 +439,7 @@ pub fn identify_groups_from_matched_soundings(matched_soundings: OcoMatches) -> 
 
         if !matched {
             match_sets.push((
-                HashSet::from([oco2_idx]), HashSet::from_iter(oco3_row.into_iter())
+                HashSet::from([oco2_idx]), HashSet::from_iter(oco3_row.iter().map(|&i| i))
             ));
         }
     }

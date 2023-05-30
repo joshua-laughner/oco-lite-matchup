@@ -1,4 +1,2 @@
 /target
-groups_test.nc4
-test_output.json
-test_output.nc4
+*.nc4

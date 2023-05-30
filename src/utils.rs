@@ -1,4 +1,4 @@
-use std::path::{PathBuf, Path};
+use std::{path::{PathBuf, Path}, io::Read};
 
 use ndarray::{Array1, ArrayView1, Ix1};
 
@@ -111,4 +111,25 @@ pub fn great_circle_distance(lon1: f32, lat1: f32, lon2: f32, lat2: f32) -> f32 
     let inner = ((dlat/2.0).sin()).powi(2) + (1.0 - (dlat/2.0).sin().powi(2) - ((lat1 + lat2)/2.0).sin().powi(2)) * (dlon/2.0).sin().powi(2);
     let central_angle = 2.0 * inner.sqrt().asin();
     central_angle * EARTH_RADIUS_STD
+}
+
+pub fn file_sha256(file: &Path) -> std::io::Result<String> {
+    use sha2::Digest;
+
+    let f = std::fs::File::open(file)?;
+    let mut reader = std::io::BufReader::new(f);
+    let mut buffer = Vec::new();
+    buffer.resize(10_000_000, 0);
+    let mut hasher = sha2::Sha256::new();
+
+    loop {
+        let n = reader.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[0..n]);
+    }
+
+    let checksum = hex::encode(hasher.finalize());
+    Ok(checksum)
 }

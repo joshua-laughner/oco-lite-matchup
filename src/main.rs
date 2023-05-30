@@ -11,6 +11,8 @@ mod oco;
 // TODO: Try to sort the output of groups
 // TODO: Store OCO-2/3 file paths and checksums in groups file
 // TODO: Verify output of groups
+// TODO: Modify to accept multiple OCO-3 lite files
+// TODO: Modify to accept multiple OCO-2 lite files (for different modes)
 fn main() -> Result<(), error::MatchupError> {
     let args = Args::parse();
 
@@ -31,16 +33,6 @@ fn main() -> Result<(), error::MatchupError> {
 
 
     matches_to_groups(matched_soundings, &args.output_file, &args.oco2_lite_file, &args.oco3_lite_file)?;
-
-    // let f = std::fs::File::create("./test_output.json").expect("Failed to create output file");
-    // serde_json::to_writer(f, &output).expect("Failed to write output");
-
-    // dbg!(utils::great_circle_distance(0.0, 0.0, 1.0, 0.0));
-    // dbg!(utils::great_circle_distance(0.0, 0.0, 0.0, 1.0));
-    // dbg!(utils::great_circle_distance(0.0, 45.0, 1.0, 45.0));
-    // dbg!(utils::great_circle_distance(0.0, 80.0, 1.0, 80.0));
-    // dbg!(utils::great_circle_distance(0.0, 80.0, 0.0, 81.0));
-
     Ok(())
 }
 
@@ -66,13 +58,26 @@ fn matches_to_groups(matched_soundings: oco::OcoMatches, nc_file: &Path, oco2_li
 
 #[derive(Debug, Parser)]
 struct Args {
+    /// Path to the OCO-2 lite file to match up with OCO-3
     oco2_lite_file: PathBuf,
+    
+    /// Path to the OCO-3 lite file to match up with OCO-2
     oco3_lite_file: PathBuf,
+    
+    /// Path to write the output netCDF file containing the matched groups of soundings
     output_file: PathBuf,
+    
+    /// Set this flag to only include good quality soundings when calculating the matches
     #[clap(short='0', long="flag0-only")]
     flag0_only: bool,
+
+    /// Give this argument with a path to save a netCDF file containing an exact map of OCO-2 to OCO-3 soundings.
+    /// Note: this can be 100s of MB
     #[clap(short='f', long="save-full-matches-as")]
     save_full_matches_as: Option<PathBuf>,
+
+    /// Give this argument with a path to a file written out with the --save-full-matches-as command to
+    /// read in the full matches rather than calculating them from the OCO-2/3 lite files.
     #[clap(short='i', long="read-full-matches")]
     read_full_matches: Option<PathBuf>
 }
