@@ -1,9 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressStyle, ParallelProgressIterator};
 use ndarray::{Array1, Ix1, Ix2};
 use netcdf::extent::Extents;
+use rayon::prelude::*;
+use rayon::iter::ParallelIterator;
 use serde::Serialize;
 
 use crate::error::MatchupError;
@@ -38,12 +40,16 @@ impl OcoGeo {
     }
 
     pub fn to_nc_group(&self, grp: &mut netcdf::GroupMut) -> Result<(), MatchupError> {
+        println!("  -> Adding dimensions");
         grp.add_dimension("sounding", self.num_soundings() as usize)
             .map_err(|e| MatchupError::from_nc_error(e, PathBuf::from("output")))?;
         grp.add_attribute("source_lite_file", self.lite_file.display().to_string().as_str())
             .map_err(|e| MatchupError::from_nc_error(e, PathBuf::from("output")))?;
+        println!("  -> Writing longitudes");
         write_nc_var(grp, self.longitude.view(), "longitude", &["sounding"], Some("degrees_east"), None)?;
+        println!("  -> Writing latitudes");
         write_nc_var(grp, self.latitude.view(), "latitude", &["sounding"], Some("degrees_north"), None)?;
+        println!("  -> Writing quality flags");
         write_nc_var(grp, self.quality.view(), "quality_flag", &["sounding"], None, Some("0 = good, 1 = bad"))?;
 
         Ok(())
@@ -62,6 +68,22 @@ impl OcoGeo {
 pub struct OcoMatches {
     indices: HashMap<u64, Vec<u64>>,
     distances: HashMap<u64, Vec<f32>>
+}
+
+impl From<Vec<(u64, Vec<(u64, f32)>)>> for OcoMatches {
+    fn from(value: Vec<(u64, Vec<(u64, f32)>)>) -> Self {
+        let mut indices = HashMap::new();
+        let mut distances = HashMap::new();
+
+        for (idx_oco2, oco3_info) in value {
+            let oco3_inds = oco3_info.iter().map(|(i, _)| *i).collect();
+            let oco3_dists = oco3_info.iter().map(|(_, d)| *d).collect();
+            indices.insert(idx_oco2, oco3_inds);
+            distances.insert(idx_oco2, oco3_dists);
+        }
+
+        Self { indices, distances }
+    }
 }
 
 impl OcoMatches {
@@ -148,11 +170,13 @@ impl OcoMatches {
         }
         let max_oco3 = self.calc_match_dim()?;
 
+        println!("  -> Adding dimensions");
         grp.add_dimension("oco2_match", n_oco2)
             .map_err(|e| MatchupError::from_nc_error(e, file.clone()))?;
         grp.add_dimension("oco3_match", max_oco3)
             .map_err(|e| MatchupError::from_nc_error(e, file.clone()))?;
 
+        println!("  -> Sorting OCO-2 matched indices");
         let ordered_keys = Self::get_sorted_keys(&self.indices);
         if ordered_keys != Self::get_sorted_keys(&self.distances) {
             return Err(MatchupError::InternalError(
@@ -160,6 +184,7 @@ impl OcoMatches {
             ))
         }
 
+        println!("  -> Writing the OCO-2 matched indices");
         write_nc_var(grp, ordered_keys.view(), Self::oco2_index_varname(), &["oco2_match"], None, 
                      Some("0-based index along the 'sounding_id' dimension of the OCO-2 lite file"))?;
 
@@ -182,14 +207,17 @@ impl OcoMatches {
     ) -> Result<(), MatchupError>{
         let file = PathBuf::from("?");
 
+        println!("  -> Writing 2D variable {varname}");
         let mut var = grp.add_variable::<T>(varname, &["oco2_match", "oco3_match"])
             .map_err(|e| MatchupError::from_nc_error(e, file.clone()))?;
         var.set_fill_value(fill_value)
             .map_err(|e| MatchupError::from_nc_error(e, file.clone()))?;
-        var.compression(9, true)
-            .map_err(|e| MatchupError::from_nc_error(e, file.clone()))?;
+        // var.compression(9, true)
+        //     .map_err(|e| MatchupError::from_nc_error(e, file.clone()))?;
 
+        let pb = setup_progress_bar(keys.len() as u64, "rows written");
         for (i, k) in keys.iter().enumerate() {
+            pb.set_position(i as u64 + 1);
             let row = data.get(k).ok_or_else(|| MatchupError::InternalError(
                 format!("OcoMatches::write_variable received a key {k} not in the HashMap for variable {varname}")
             ))?;
@@ -197,7 +225,9 @@ impl OcoMatches {
             var.put_values(&row, extents)
                 .map_err(|e| MatchupError::from_nc_error(e, file.clone()))?;
         }
+        pb.finish_with_message("  -> Finished writing 2D variable values");
 
+        println!("  -> Writing attributes");
         if let Some(units) = units {
             var.add_attribute("units", units)
                 .map_err(|e| MatchupError::from_nc_error(e, file.clone()))?;
@@ -207,6 +237,7 @@ impl OcoMatches {
             var.add_attribute("description", description)
                 .map_err(|e| MatchupError::from_nc_error(e, file.clone()))?;
         }
+        println!("  -> Finished with variable {varname}");
 
         Ok(())
     }
@@ -383,48 +414,69 @@ impl OcoMatchGroups {
     }
 }
 
-pub fn match_oco3_to_oco2(oco2: &OcoGeo, oco3: &OcoGeo, max_dist: f32) -> OcoMatches {
-    let mut indices: HashMap<u64, Vec<u64>> = HashMap::new();
-    let mut distances: HashMap<u64, Vec<f32>> = HashMap::new();
+pub fn match_oco3_to_oco2_parallel(oco2: &OcoGeo, oco3: &OcoGeo, max_dist: f32) -> OcoMatches {
+    let n_oco2 = oco2.longitude.len();
+    let oco2_inds = Array1::from_iter(0..n_oco2);
+    
+    let mut matchups: Vec<(u64, Vec<(u64, f32)>)> = Vec::new();
 
-    let pb2 = setup_oco2_progress(oco2.num_soundings());
+    let par_it = ndarray::Zip::from(&oco2_inds)
+        .and(&oco2.longitude)
+        .and(&oco2.latitude)
+        .into_par_iter();
 
-    // TODO: try parallelizing this
-    for (idx_oco2, (&lon_oco2, &lat_oco2)) in oco2.iter_latlon().enumerate() {
-        let idx_oco2 = idx_oco2 as u64;
-        pb2.set_position(idx_oco2 + 1);
-        for (idx_oco3, (&lon_oco3, &lat_oco3)) in oco3.iter_latlon().enumerate() {
-            let idx_oco3 = idx_oco3 as u64;
-            let this_dist = great_circle_distance(lon_oco2, lat_oco2, lon_oco3, lat_oco3);
-
-            if this_dist <= max_dist {
-                indices.entry(idx_oco2 as u64).or_default().push(idx_oco3);
-                distances.entry(idx_oco2 as u64).or_default().push(this_dist);
+    matchups.par_extend(
+        par_it
+        .progress_count(n_oco2 as u64)
+        .filter_map(|(&i, &x, &y)| { 
+            let oco3 = oco3.clone();
+            let this_result = make_one_oco_match_vec(i, x, y, &oco3, max_dist);
+            if this_result.1.is_empty() {
+                None
+            }else{
+                Some(this_result)
             }
+        }
+    ));
+    
+    OcoMatches::from(matchups)
+}
+
+fn make_one_oco_match_vec(idx_oco2: usize, lon_oco2: f32, lat_oco2: f32, oco3: &OcoGeo, max_dist: f32) -> (u64, Vec<(u64, f32)>) {
+    let mut oco3_matches = Vec::new();
+
+    for (idx_oco3, (&lon_oco3, &lat_oco3)) in oco3.iter_latlon().enumerate() {
+        let idx_oco3 = idx_oco3 as u64;
+        let this_dist = great_circle_distance(lon_oco2, lat_oco2, lon_oco3, lat_oco3);
+
+        if this_dist <= max_dist {
+            oco3_matches.push((idx_oco3, this_dist));
         }
     }
 
-    pb2.finish();
-
-    OcoMatches { indices, distances }
+    (idx_oco2 as u64, oco3_matches)
 }
 
-fn setup_oco2_progress(n_oco2: u64) -> ProgressBar {
-    let oco2_style = ProgressStyle::with_template(
-        "OCO-2: {human_pos}/{human_len} {wide_bar} ETA = {eta}"
+fn setup_progress_bar(n_match: u64, action: &str) -> ProgressBar {
+    let style = ProgressStyle::with_template(
+        &format!("{{bar}} {{human_pos}}/{{human_len}} {action}")
     ).unwrap();
 
-    let pb2 = ProgressBar::new(n_oco2);
-    pb2.set_style(oco2_style);
-    pb2
+    let pb = ProgressBar::new(n_match);
+    pb.set_style(style);
+    pb
 }
 
 pub fn identify_groups_from_matched_soundings(matched_soundings: OcoMatches) -> OcoMatchGroups {
     let mut match_sets: Vec<(HashSet<u64>, HashSet<u64>)> = Vec::new();
-    // It's important to iterate over ordered keys: when I let this be unordered
+    // It's important to iterate over ordered keys: when I let this be unordered, some groups that
+    // should be one got split up, I think because the (non-overlapping) ends got put into separate 
+    // groups before the middle soundings were handled.
     let ordered_keys = matched_soundings.ordered_oco2_indices();
 
+    let pb = setup_progress_bar(ordered_keys.len() as u64, "match vectors grouped");
     for oco2_idx in ordered_keys {
+        pb.inc(1);
         let oco3_row = matched_soundings.indices.get(&oco2_idx)
             .expect("Tried to get a row of OCO-3 indices for an OCO-2 index that does not exist");
         let mut matched = false;
@@ -443,6 +495,7 @@ pub fn identify_groups_from_matched_soundings(matched_soundings: OcoMatches) -> 
             ));
         }
     }
+    pb.finish_with_message("  -> All matches grouped.");
 
     OcoMatchGroups { match_sets }
 }
