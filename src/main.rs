@@ -2,13 +2,18 @@ use std::path::{PathBuf, Path};
 
 use clap::Parser;
 use error::MatchupError;
+use oco::OcoGeo;
 use serde::Serialize;
 
 mod error;
 mod utils;
 mod oco;
 
+const MAX_DELTA_TIME_SECONDS: f64 = 43_200.0; // 12 hours
+
 // TODO: Modify to accept multiple OCO-3 lite files
+//  --> In principle this is mostly there, just need to tweak the group saving to store the file inds and test
+//      that the extending an OcoGeo struct works correctly.
 // TODO: Modify to accept multiple OCO-2 lite files (for different modes? not sure if needed)
 fn main() -> Result<(), error::MatchupError> {
     let args = Args::parse();
@@ -25,7 +30,7 @@ fn main() -> Result<(), error::MatchupError> {
         oco::OcoMatches::from_nc_group(&grp)?
     } else {
         println!("Looking for matches matches between OCO-2 and -3");
-        let full_matches = find_matches(&args.oco2_lite_file, &args.oco3_lite_file, args.flag0_only)?;
+        let full_matches = find_matches(&args.oco2_lite_file, args.get_all_oco3_files(), args.flag0_only)?;
         if let Some(full_match_file) = &args.save_full_matches_as {
             println!("Saving full match netCDF file: {}", full_match_file.display());
             full_matches.save_netcdf(&full_match_file)?;
@@ -39,11 +44,16 @@ fn main() -> Result<(), error::MatchupError> {
     Ok(())
 }
 
-fn find_matches(oco2_lite_file: &Path, oco3_lite_file: &Path, flag0_only: bool) -> Result<Output, MatchupError> {
+fn find_matches(oco2_lite_file: &Path, oco3_lite_files: Vec<&Path>, flag0_only: bool) -> Result<Output, MatchupError> {
     let oco2_locs = oco::OcoGeo::load_lite_file(oco2_lite_file, flag0_only)?;
-    let oco3_locs = oco::OcoGeo::load_lite_file(oco3_lite_file, flag0_only)?;
+    let oco3_locs = oco3_lite_files.into_iter()
+        .fold(Ok(OcoGeo::default()), |acc: Result<OcoGeo, MatchupError>, el| {
+            let acc = acc?;
+            let next_locs = oco::OcoGeo::load_lite_file(el, flag0_only)?;
+            Ok(acc.extend(next_locs))
+        })?;
 
-    let matches = oco::match_oco3_to_oco2_parallel(&oco2_locs, &oco3_locs, 100.0);
+    let matches = oco::match_oco3_to_oco2_parallel(&oco2_locs, &oco3_locs, 100.0, MAX_DELTA_TIME_SECONDS);
     Ok(Output {
         oco2_locations: oco2_locs,
         oco3_locations: oco3_locs,
@@ -61,32 +71,52 @@ fn matches_to_groups(matched_soundings: oco::OcoMatches, nc_file: &Path, oco2_li
 
 #[derive(Debug, Parser)]
 struct Args {
+    /// Path to write the output netCDF file containing the matched groups of soundings
+    output_file: PathBuf,
+
     /// Path to the OCO-2 lite file to match up with OCO-3
     oco2_lite_file: PathBuf,
     
-    /// Path to the OCO-3 lite file to match up with OCO-2
+    /// Path to the OCO-3 lite file for the same day as the OCO-2 one. In most cases, you should also
+    /// specify --oco3-lite-file-before and --oco3-lite-file-after unless there is not an OCO-3 lite
+    /// file for the day before or after.
     oco3_lite_file: PathBuf,
+
+    /// Path to the OCO-3 lite file for the day before the OCO-2 one.
+    #[clap(short='b', long)]
+    oco3_lite_file_before: Option<PathBuf>,
     
-    /// Path to write the output netCDF file containing the matched groups of soundings
-    output_file: PathBuf,
+    /// Path to the OCO-3 lite file for the day after the OCO-2 one.
+    #[clap(short='a', long)]
+    oco3_lite_file_after: Option<PathBuf>,
     
     /// Set this flag to only include good quality soundings when calculating the matches
-    #[clap(short='0', long="flag0-only")]
+    #[clap(short='0', long)]
     flag0_only: bool,
 
     /// Give this argument with a path to save a netCDF file containing an exact map of OCO-2 to OCO-3 soundings.
     /// Note: this can be 100s of MB
-    #[clap(short='f', long="save-full-matches-as")]
+    #[clap(short='f', long)]
     save_full_matches_as: Option<PathBuf>,
 
     /// Give this argument with a path to a file written out with the --save-full-matches-as command to
     /// read in the full matches rather than calculating them from the OCO-2/3 lite files.
-    #[clap(short='i', long="read-full-matches")]
+    #[clap(short='i', long)]
     read_full_matches: Option<PathBuf>,
 
     /// The number of processors to use for matching OCO-2 and OCO-3 soundings. The default is 8.
-    #[clap(short='n', long="--nprocs", default_value="8")]
+    #[clap(short='n', long, default_value="8")]
     nprocs: usize
+}
+
+impl Args {
+    fn get_all_oco3_files<'a>(&'a self) -> Vec<&'a Path> {
+        let mut files = Vec::new();
+        if let Some(p) = &self.oco3_lite_file_before { files.push(p.as_path()); } 
+        files.push(&self.oco3_lite_file);
+        if let Some(p) = &self.oco3_lite_file_after { files.push(p.as_path()); }
+        files
+    }
 }
 
 #[derive(Debug, Serialize)]

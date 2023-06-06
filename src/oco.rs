@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use indicatif::{ProgressBar, ProgressStyle, ParallelProgressIterator};
-use ndarray::{Array1, Ix1, Ix2};
+use itertools::izip;
+use ndarray::{Array1, Ix1, Ix2, concatenate, Axis};
 use netcdf::extent::Extents;
 use rayon::prelude::*;
 use rayon::iter::ParallelIterator;
@@ -11,9 +12,11 @@ use serde::Serialize;
 use crate::error::MatchupError;
 use crate::utils::{load_nc_var, write_nc_var, filter_by_quality, great_circle_distance, load_nc_var_from_file, get_str_attr_with_default, self};
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Default)]
 pub struct OcoGeo {
-    pub lite_file: PathBuf,
+    pub lite_files: Vec<PathBuf>,
+    pub file_index: Array1<u8>,
+    pub timestamp: Array1<f64>,
     pub longitude: Array1<f32>,
     pub latitude: Array1<f32>,
     pub quality: Array1<u8>
@@ -23,28 +26,47 @@ impl OcoGeo {
     pub fn load_lite_file(lite_file: &Path, flag0_only: bool) -> Result<Self, MatchupError> {
         let ds = netcdf::open(lite_file)
         .map_err(|e| MatchupError::from_nc_error(e, lite_file.to_owned()))?;
-        
+            
+        let timestamp = load_nc_var(&ds, "time")?;
         let longitude = load_nc_var(&ds, "longitude")?;
         let latitude = load_nc_var(&ds, "latitude")?;
         let quality = load_nc_var(&ds, "xco2_quality_flag")?;
+        let file_index = Array1::zeros(timestamp.len());
 
         if flag0_only {
             let longitude = filter_by_quality(longitude.view(), quality.view());
             let latitude = filter_by_quality(latitude.view(), quality.view());
             let quality = filter_by_quality(quality.view(), quality.view());
-            Ok(OcoGeo { lite_file: lite_file.to_owned(), longitude, latitude, quality })
+            Ok(OcoGeo { lite_files: vec![lite_file.to_owned()], file_index, timestamp, longitude, latitude, quality })
         }else{
-            Ok(OcoGeo { lite_file: lite_file.to_owned(), longitude, latitude, quality })
+            Ok(OcoGeo { lite_files: vec![lite_file.to_owned()], file_index, timestamp, longitude, latitude, quality })
         }
 
     }
 
     pub fn to_nc_group(&self, grp: &mut netcdf::GroupMut) -> Result<(), MatchupError> {
+        let out_file = PathBuf::from("?");
         println!("  -> Adding dimensions");
+        grp.add_dimension("lite_file", self.lite_files.len())
+            .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
         grp.add_dimension("sounding", self.num_soundings() as usize)
-            .map_err(|e| MatchupError::from_nc_error(e, PathBuf::from("output")))?;
-        grp.add_attribute("source_lite_file", self.lite_file.display().to_string().as_str())
-            .map_err(|e| MatchupError::from_nc_error(e, PathBuf::from("output")))?;
+            .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
+        
+        println!("  -> Writing lite file list");
+        let mut var = grp.add_string_variable("lite_file", &["lite_file"])
+            .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
+        for (i, fname) in self.lite_files.iter().enumerate() {
+            let ex: Extents = i.into();
+            var.put_string(fname.display().to_string().as_str(), ex)
+                .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
+        }
+        var.add_attribute("description", "Source lite files that these soundings came from")
+            .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
+
+        println!("  -> Writing file index");
+        write_nc_var(grp, self.file_index.view(), "file_index", &["sounding"], None, Some("Index of the lite_file variable that defines the path which this point came from"))?;
+        println!("  -> Writing timestamps");
+        write_nc_var(grp, self.timestamp.view(), "time", &["sounding"], Some("seconds since 1970-01-01 00:00:00"), None)?;
         println!("  -> Writing longitudes");
         write_nc_var(grp, self.longitude.view(), "longitude", &["sounding"], Some("degrees_east"), None)?;
         println!("  -> Writing latitudes");
@@ -55,34 +77,46 @@ impl OcoGeo {
         Ok(())
     }
 
-    pub fn num_soundings(&self) -> u64 {
-        self.longitude.len() as u64
+    pub fn extend(mut self, other: Self) -> Self {
+        let curr_n_files = self.lite_files.len() as u8;
+        self.lite_files.extend(other.lite_files);
+        self.file_index = concatenate![Axis(0), self.file_index, other.file_index + curr_n_files];
+        self.timestamp = concatenate![Axis(0), self.timestamp, other.timestamp];
+        self.longitude = concatenate![Axis(0), self.longitude, other.longitude];
+        self.latitude = concatenate![Axis(0), self.latitude, other.latitude];
+        self.quality = concatenate![Axis(0), self.quality, other.quality];
+
+        self
     }
 
-    pub fn iter_latlon(&self) -> std::iter::Zip<ndarray::iter::Iter<'_, f32, Ix1>, ndarray::iter::Iter<'_, f32, Ix1>> {
-        self.longitude.iter().zip(self.latitude.iter())
+    pub fn num_soundings(&self) -> u64 {
+        self.longitude.len() as u64
     }
 }
 
 #[derive(Debug, Serialize)]
 pub struct OcoMatches {
-    indices: HashMap<u64, Vec<u64>>,
+    file_indices: HashMap<u64, Vec<u8>>,
+    sounding_indices: HashMap<u64, Vec<u64>>,
     distances: HashMap<u64, Vec<f32>>
 }
 
-impl From<Vec<(u64, Vec<(u64, f32)>)>> for OcoMatches {
-    fn from(value: Vec<(u64, Vec<(u64, f32)>)>) -> Self {
-        let mut indices = HashMap::new();
+impl From<Vec<(u64, Vec<(u8, u64, f32)>)>> for OcoMatches {
+    fn from(value: Vec<(u64, Vec<(u8, u64, f32)>)>) -> Self {
+        let mut file_indices = HashMap::new();
+        let mut sounding_indices = HashMap::new();
         let mut distances = HashMap::new();
 
         for (idx_oco2, oco3_info) in value {
-            let oco3_inds = oco3_info.iter().map(|(i, _)| *i).collect();
-            let oco3_dists = oco3_info.iter().map(|(_, d)| *d).collect();
-            indices.insert(idx_oco2, oco3_inds);
+            let oco3_file_inds = oco3_info.iter().map(|(f, _, _)| *f).collect();
+            let oco3_sounding_inds = oco3_info.iter().map(|(_, i, _)| *i).collect();
+            let oco3_dists = oco3_info.iter().map(|(_, _, d)| *d).collect();
+            file_indices.insert(idx_oco2, oco3_file_inds);
+            sounding_indices.insert(idx_oco2, oco3_sounding_inds);
             distances.insert(idx_oco2, oco3_dists);
         }
 
-        Self { indices, distances }
+        Self { file_indices, sounding_indices, distances }
     }
 }
 
@@ -95,12 +129,16 @@ impl OcoMatches {
         "oco3_index"
     }
 
+    fn oco3_fileindex_varname() -> &'static str {
+        "oco3_file_index"
+    }
+
     fn dist_varname() -> &'static str {
         "distance"
     }
 
     pub fn ordered_oco2_indices(&self) -> Vec<u64> {
-        let mut oco2inds: Vec<u64> = self.indices
+        let mut oco2inds: Vec<u64> = self.sounding_indices
             .keys()
             .map(|&k| k)
             .collect();
@@ -134,6 +172,17 @@ impl OcoMatches {
             .into_dimensionality::<Ix2>()
             .map_err(|e| MatchupError::from_shape_error(e, out_file.clone(), Self::oco3_index_varname().to_owned()))?;
 
+        let oco3_fileind_var = grp.variable(Self::oco3_fileindex_varname())
+            .ok_or_else(|| MatchupError::NetcdfMissingVar { file: out_file.clone(), varname: Self::oco3_fileindex_varname().to_owned() })?;
+        let oco3_fileind_fill_val = oco3_fileind_var.fill_value()
+            .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?
+            .unwrap_or(u8::MAX);
+        let oco3_fileinds = oco3_fileind_var
+            .values_arr::<u8, _>(netcdf::extent::Extents::All)
+            .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?
+            .into_dimensionality::<Ix2>()
+            .map_err(|e| MatchupError::from_shape_error(e, out_file.clone(), Self::oco3_fileindex_varname().to_owned()))?;
+
         let dist_var = grp.variable(Self::dist_varname())
             .ok_or_else(|| MatchupError::NetcdfMissingVar { file: out_file.clone(), varname: Self::dist_varname().to_owned() })?;
         let dist_fill_val = dist_var.fill_value()
@@ -145,27 +194,37 @@ impl OcoMatches {
             .into_dimensionality::<Ix2>()
             .map_err(|e| MatchupError::from_shape_error(e, out_file.clone(), Self::dist_varname().to_owned()))?;
 
-        let mut indices = HashMap::new();
+        let mut file_indices = HashMap::new();
+        let mut sounding_indices = HashMap::new();
         let mut distances = HashMap::new();
 
-        ndarray::Zip::from(&oco2_inds).and(oco3_inds.rows()).and(dist_arr.rows()).for_each(|&oco2i, oco3i, dist| {
+        let it = ndarray::Zip::
+            from(&oco2_inds)
+            .and(oco3_inds.rows())
+            .and(oco3_fileinds.rows())
+            .and(dist_arr.rows());
+
+        it.for_each(|&oco2i, oco3i, oco3fi, dist| {
+            
             let oco3i: Vec<u64> = oco3i.iter().filter_map(|&v| if v != oco3_ind_fill_val {Some(v)} else {None} ).collect();
+            let oco3fi: Vec<u8> = oco3fi.iter().filter_map(|&v| if v != oco3_fileind_fill_val { Some(v) } else { None }).collect();
             let dist: Vec<f32> = dist.iter().filter_map(|&v| if v != dist_fill_val { Some(v) } else { None }).collect();
-            indices.insert(oco2i, oco3i);
+            sounding_indices.insert(oco2i, oco3i);
+            file_indices.insert(oco2i, oco3fi);
             distances.insert(oco2i, dist);
         });
 
-        Ok(Self { indices, distances })
+        Ok(Self { file_indices, sounding_indices, distances })
     }
 
     pub fn to_nc_group(&self, grp: &mut netcdf::GroupMut) -> Result<(), MatchupError> {
         let file = PathBuf::from("?");
 
         // Vlen types have weird lifetime issues, so we're doing 2D arrays.
-        let n_oco2 = self.indices.len();
-        if n_oco2 != self.distances.len() {
+        let n_oco2 = self.sounding_indices.len();
+        if n_oco2 != self.distances.len() || n_oco2 != self.file_indices.len() {
             return Err(MatchupError::InternalError(format!(
-                "Inconsistent number of OCO-2 soundings in indices {} and distances {}", n_oco2, self.distances.len()
+                "Inconsistent number of OCO-2 soundings in indices {}, distances {}, and/or file indices {}", n_oco2, self.distances.len(), self.file_indices.len()
             )))
         }
         let max_oco3 = self.calc_match_dim()?;
@@ -177,7 +236,7 @@ impl OcoMatches {
             .map_err(|e| MatchupError::from_nc_error(e, file.clone()))?;
 
         println!("  -> Sorting OCO-2 matched indices");
-        let ordered_keys = Self::get_sorted_keys(&self.indices);
+        let ordered_keys = Self::get_sorted_keys(&self.sounding_indices);
         if ordered_keys != Self::get_sorted_keys(&self.distances) {
             return Err(MatchupError::InternalError(
                 "OcoMatches instance has inconsistent keys for `indices` and `distances`".to_owned()
@@ -188,7 +247,9 @@ impl OcoMatches {
         write_nc_var(grp, ordered_keys.view(), Self::oco2_index_varname(), &["oco2_match"], None, 
                      Some("0-based index along the 'sounding_id' dimension of the OCO-2 lite file"))?;
 
-        Self::write_variable(grp, &self.indices, ordered_keys.as_slice().unwrap(), Self::oco3_index_varname(), None, 
+        Self::write_variable(grp, &self.file_indices, ordered_keys.as_slice().unwrap(), Self::oco3_fileindex_varname(), 
+                             Some("0-based index along the 'lite_file' dimension of the OCO-3 group lite file variable"), None, u8::MAX)?;
+        Self::write_variable(grp, &self.sounding_indices, ordered_keys.as_slice().unwrap(), Self::oco3_index_varname(), None, 
                              Some("0-based index along the 'sounding_id' dimension of the OCO-3 lite file"), u64::MAX)?;
         Self::write_variable(grp, &self.distances, ordered_keys.as_slice().unwrap(), Self::dist_varname(), Some("km"), 
                              Some("Great-circle distance between the OCO-2 and OCO-3 soundings"), f32::MIN)?;
@@ -243,7 +304,7 @@ impl OcoMatches {
     }
 
     fn calc_match_dim(&self) -> Result<usize, MatchupError> {        
-        let max_ninds = self.indices
+        let max_ninds = self.sounding_indices
             .values()
             .map(|v| v.len())
             .max()
@@ -275,6 +336,13 @@ impl OcoMatches {
 
 pub struct OcoMatchGroups {
     match_sets: Vec<(HashSet<u64>, HashSet<u64>)>
+}
+
+pub struct MatchGroup {
+    oco2_file_index: u64,
+    oco2_sounding_indices: HashSet<u64>,
+    oco3_file_index: u64,
+    oco3_sounding_indices: HashSet<u64>
 }
 
 impl OcoMatchGroups {
@@ -414,23 +482,24 @@ impl OcoMatchGroups {
     }
 }
 
-pub fn match_oco3_to_oco2_parallel(oco2: &OcoGeo, oco3: &OcoGeo, max_dist: f32) -> OcoMatches {
+pub fn match_oco3_to_oco2_parallel(oco2: &OcoGeo, oco3: &OcoGeo, max_dist: f32, max_dt: f64) -> OcoMatches {
     let n_oco2 = oco2.longitude.len();
     let oco2_inds = Array1::from_iter(0..n_oco2);
     
-    let mut matchups: Vec<(u64, Vec<(u64, f32)>)> = Vec::new();
+    let mut matchups: Vec<(u64, Vec<(u8, u64, f32)>)> = Vec::new();
 
     let par_it = ndarray::Zip::from(&oco2_inds)
         .and(&oco2.longitude)
         .and(&oco2.latitude)
+        .and(&oco2.timestamp)
         .into_par_iter();
 
     matchups.par_extend(
         par_it
         .progress_count(n_oco2 as u64)
-        .filter_map(|(&i, &x, &y)| { 
+        .filter_map(|(&i, &x, &y, &t)| { 
             let oco3 = oco3.clone();
-            let this_result = make_one_oco_match_vec(i, x, y, &oco3, max_dist);
+            let this_result = make_one_oco_match_vec(i, x, y, t, &oco3, max_dist, max_dt);
             if this_result.1.is_empty() {
                 None
             }else{
@@ -442,15 +511,20 @@ pub fn match_oco3_to_oco2_parallel(oco2: &OcoGeo, oco3: &OcoGeo, max_dist: f32) 
     OcoMatches::from(matchups)
 }
 
-fn make_one_oco_match_vec(idx_oco2: usize, lon_oco2: f32, lat_oco2: f32, oco3: &OcoGeo, max_dist: f32) -> (u64, Vec<(u64, f32)>) {
+fn make_one_oco_match_vec(idx_oco2: usize, lon_oco2: f32, lat_oco2: f32, ts_oco2: f64, oco3: &OcoGeo, max_dist: f32, max_dt: f64) -> (u64, Vec<(u8, u64, f32)>) {
     let mut oco3_matches = Vec::new();
+    let it = izip!(oco3.file_index.iter(),
+                                                     oco3.longitude.iter(),
+                                                     oco3.latitude.iter(),
+                                                     oco3.timestamp.iter()).enumerate();
 
-    for (idx_oco3, (&lon_oco3, &lat_oco3)) in oco3.iter_latlon().enumerate() {
+    for (idx_oco3, (&file_idx_oco3, &lon_oco3, &lat_oco3, &ts_oco3)) in it {
         let idx_oco3 = idx_oco3 as u64;
         let this_dist = great_circle_distance(lon_oco2, lat_oco2, lon_oco3, lat_oco3);
+        let this_delta_time = (ts_oco2 - ts_oco3).abs();
 
-        if this_dist <= max_dist {
-            oco3_matches.push((idx_oco3, this_dist));
+        if this_dist <= max_dist && this_delta_time < max_dt {
+            oco3_matches.push((file_idx_oco3, idx_oco3, this_dist));
         }
     }
 
@@ -477,7 +551,7 @@ pub fn identify_groups_from_matched_soundings(matched_soundings: OcoMatches) -> 
     let pb = setup_progress_bar(ordered_keys.len() as u64, "match vectors grouped");
     for oco2_idx in ordered_keys {
         pb.inc(1);
-        let oco3_row = matched_soundings.indices.get(&oco2_idx)
+        let oco3_row = matched_soundings.sounding_indices.get(&oco2_idx)
             .expect("Tried to get a row of OCO-3 indices for an OCO-2 index that does not exist");
         let mut matched = false;
         for (oco2_idx_set, oco3_idx_set) in match_sets.iter_mut() {

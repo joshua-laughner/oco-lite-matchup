@@ -9,6 +9,7 @@ edition = "2021"
 clap = { version = "4.3.0", features = ["derive"] }
 hex = "0.4.3"
 indicatif = { version = "0.17.3", features = ["rayon"] }
+itertools = "0.10.5"
 ndarray = { version = "0.15.6", features = ["serde", "rayon"] }
 netcdf = { version = "0.8.1", features = ["static"] }
 rayon = "1.7.0"
