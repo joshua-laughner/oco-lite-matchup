@@ -21,7 +21,7 @@ pub(crate) fn nc_file(ds: &netcdf::File) -> PathBuf {
 pub fn load_nc_var<T: netcdf::NcPutGet>(ds: &netcdf::File, varname: &str) -> Result<ndarray::Array1<T>, MatchupError> {
     let file = nc_file(ds);
     let var = ds.variable(varname)
-        .ok_or_else(|| MatchupError::NetcdfMissingVar { file: file.clone(), varname: varname.to_owned() })?;
+        .ok_or_else(|| MatchupError::NetcdfMissingVar { file: Some(file.clone()), varname: varname.to_owned() })?;
     let data = var.values_arr::<T, _>(netcdf::extent::Extents::All)
         .map_err(|e| MatchupError::from_nc_error(e, file.clone()))?
         .into_dimensionality::<Ix1>()
@@ -54,7 +54,7 @@ pub fn get_str_attr_with_default(nc_var: &netcdf::Variable, attr_name: &str, def
             let s = v.join("\n");
             Ok(s)
         },
-        _ => Err(MatchupError::NetcdfWrongAttrType { file: PathBuf::from("?"), varname: nc_var.name(), attname: attr_name.to_owned(), expected: "String" })
+        _ => Err(MatchupError::NetcdfWrongAttrType { file: None, varname: nc_var.name(), attname: attr_name.to_owned(), expected: "String" })
     }
 }
 
@@ -66,21 +66,48 @@ pub fn write_nc_var<T: netcdf::NcPutGet>(
     units: Option<&str>, 
     description: Option<&str>
 ) -> Result<(), MatchupError> {
-    let file = PathBuf::from("output");
-
-    let mut var = grp.add_variable::<T>(name, dims)
-        .map_err(|e| MatchupError::from_nc_error(e, file.clone()))?;
-    var.put_values(data.as_slice().unwrap(), netcdf::extent::Extents::All)
-        .map_err(|e| MatchupError::from_nc_error(e, file.clone()))?;
+    let mut var = grp.add_variable::<T>(name, dims)?;
+    var.put_values(data.as_slice().unwrap(), netcdf::extent::Extents::All)?;
 
     if let Some(units) = units {
-        var.add_attribute("units", units)
-            .map_err(|e| MatchupError::from_nc_error(e, file.clone()))?;
+        var.add_attribute("units", units)?;
     }
 
     if let Some(description) = description {
-        var.add_attribute("description", description)
-            .map_err(|e| MatchupError::from_nc_error(e, file.clone()))?;
+        var.add_attribute("description", description)?;
+    }
+
+    Ok(())
+}
+
+pub fn write_string_nc_var<T: AsRef<str>>(
+    grp: &mut netcdf::GroupMut,
+    data: &[T],
+    name: &str,
+    dim: &str,
+    units: Option<&str>,
+    description: Option<&str>
+) -> Result<(), MatchupError> {
+
+    if let Some(d) = grp.dimension(dim) {
+        if d.len() != data.len() {
+            return Err(MatchupError::InternalError(format!("Inconsistent length between dimension '{dim}' and data passed for variable '{name}'")));
+        }
+    } else {
+        grp.add_dimension(dim, data.len())?;
+    }
+
+    let mut var = grp.add_string_variable(name, &[dim])?;
+    for (i, s) in data.iter().enumerate() {
+        var.put_string(s.as_ref(), i)?;
+    }
+
+    if let Some(units) = units {
+        var.add_attribute("units", units)?;
+    }
+
+    if let Some(description) = description {
+        var.add_attribute("description", description)?;
     }
 
     Ok(())

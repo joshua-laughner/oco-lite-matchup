@@ -26,10 +26,10 @@ fn main() -> Result<(), error::MatchupError> {
             .map_err(|e| MatchupError::from_nc_error(e, full_matches_in.clone()))?;
         let grp = ds.group("matches")
             .map_err(|e| MatchupError::from_nc_error(e, full_matches_in.clone()))?
-            .ok_or_else(|| MatchupError::NetcdfMissingGroup { file: full_matches_in.clone(), grpname: "matches".to_owned() })?;
+            .ok_or_else(|| MatchupError::NetcdfMissingGroup { file: Some(full_matches_in.clone()), grpname: "matches".to_owned() })?;
         oco::OcoMatches::from_nc_group(&grp)?
     } else {
-        println!("Looking for matches matches between OCO-2 and -3");
+        println!("Looking for matches between OCO-2 and -3");
         let full_matches = find_matches(&args.oco2_lite_file, args.get_all_oco3_files(), args.flag0_only)?;
         if let Some(full_match_file) = &args.save_full_matches_as {
             println!("Saving full match netCDF file: {}", full_match_file.display());

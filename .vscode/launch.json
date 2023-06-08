@@ -8,10 +8,10 @@
             "type": "lldb",
             "request": "launch",
             "name": "Debug",
-            "args": ["/home/laughner/scratch/oco2_LtCO2_230224_B11014Ar_230405191336s.nc4",
-                     "/home/laughner/scratch/oco3_LtCO2_230224_B10400Br_230414162256s.nc4",
-                     "groups_test.nc4",
-                     "-i", "test_output.nc4"],
+            "args": ["-f", "test_output_par2.nc4",
+                     "groups_test_par2.nc4",
+                     "/home/laughner/scratch/oco2_LtCO2_230224_B11014Ar_230405191336s.nc4",
+                     "/home/laughner/scratch/oco3_LtCO2_230224_B10400Br_230414162256s.nc4"],
             "cwd": "${workspaceFolder}",
             "cargo": {
                 "args": [

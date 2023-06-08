@@ -568,6 +568,7 @@ dependencies = [
  "itertools",
  "ndarray",
  "netcdf",
+ "num-traits",
  "rayon",
  "serde",
  "serde_json",
