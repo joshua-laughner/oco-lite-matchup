@@ -12,6 +12,10 @@ use serde::Serialize;
 use crate::error::MatchupError;
 use crate::utils::{load_nc_var, write_nc_var, filter_by_quality, great_circle_distance, get_str_attr_with_default, self};
 
+const SOUNDING_ID_UNITS: &'static str = "YYYYMMDDhhmmssmf";
+const SOUNDING_ID_DESCR_OCO2: &'static str = "OCO-2 sounding ID";
+const SOUNDING_ID_DESCR_OCO3: &'static str = "OCO-3 sounding ID";
+
 #[derive(Debug, Serialize, Default)]
 pub struct OcoGeo {
     pub lite_files: Vec<PathBuf>,
@@ -255,11 +259,11 @@ impl OcoMatches {
 
         self.write_1d_variable(grp, Self::oco2_fileindex_varname(), None, Some("0-based index of the file from the oco2_file variable that this sounding came from"), |m| m.oco2_file_index, u8::MAX)?;
         self.write_1d_variable(grp, Self::oco2_index_varname(), None, Some("0-based index of the sounding within its lite file"), |m| m.oco2_sounding_index, u64::MAX)?;
-        self.write_1d_variable(grp, Self::oco2_sounding_id_varname(), Some("YYYYMMDDhhmmssmf"), Some("OCO-2 sounding ID"), |m| m.oco2_sounding_id, u64::MAX)?;
+        self.write_1d_variable(grp, Self::oco2_sounding_id_varname(), Some(SOUNDING_ID_UNITS), Some(SOUNDING_ID_DESCR_OCO2), |m| m.oco2_sounding_id, u64::MAX)?;
 
         self.write_2d_variable(grp, Self::oco3_fileindex_varname(), None, Some("0-based index of the file from the oco2_file variable that this sounding came from"), |m| m.oco3_file_indices.as_slice(), u8::MAX)?;
         self.write_2d_variable(grp, Self::oco3_index_varname(), None, Some("0-based index of the sounding within its lite file"), |m| m.oco3_sounding_indices.as_slice(), u64::MAX)?;
-        self.write_2d_variable(grp, Self::oco3_sounding_id_varname(), Some("YYYYMMDDhhmmssmf"), Some("OCO-2 sounding ID"), |m| m.oco3_sounding_ids.as_slice(), u64::MAX)?;
+        self.write_2d_variable(grp, Self::oco3_sounding_id_varname(), Some(SOUNDING_ID_UNITS), Some(SOUNDING_ID_DESCR_OCO3), |m| m.oco3_sounding_ids.as_slice(), u64::MAX)?;
         self.write_2d_variable(grp, Self::dist_varname(), Some("km"), Some("Distance between the OCO-2 and OCO-3 sounding"), |m| m.distance_km.as_slice(), f32::MAX)?;
         Ok(())
     }
@@ -396,9 +400,9 @@ pub struct OcoMatchGroups {
 }
 
 impl OcoMatchGroups {
-    pub fn to_nc_group(&self, ds: &mut netcdf::MutableFile, group_name: Option<&str>, oco2_lite_file: &Path, oco3_lite_file: &Path) -> Result<(), MatchupError> {
+    pub fn to_nc_group(&self, ds: &mut netcdf::MutableFile, group_name: Option<&str>) -> Result<(), MatchupError> {
         let out_file = utils::nc_file(ds);
-        let mut grp = self.setup_nc_group(ds, group_name, oco2_lite_file, oco3_lite_file)?;
+        let mut grp = self.setup_nc_group(ds, group_name)?;
 
         self.write_file_variables(&mut grp)?;
 
@@ -492,30 +496,8 @@ impl OcoMatchGroups {
         format!("oco{instrument}_file_index")
     }
 
-    fn setup_nc_group<'f>(&'f self, ds: &'f mut netcdf::MutableFile, group_name: Option<&str>, oco2_lite_file: &Path, oco3_lite_file: &Path) -> Result<netcdf::GroupMut, MatchupError> {
-        // Convert the lite files to path strings and get checksums, we'll make these attributes later
-        let oco2_file_string = format!("{}", oco2_lite_file.display());
-        let oco2_checksum = utils::file_sha256(oco2_lite_file)?;
-        let oco3_file_string = format!("{}", oco2_lite_file.display());
-        let oco3_checksum = utils::file_sha256(oco3_lite_file)?;
+    fn setup_nc_group<'f>(&'f self, ds: &'f mut netcdf::MutableFile, group_name: Option<&str>) -> Result<netcdf::GroupMut, MatchupError> {
         
-        // Get the units and long name from the OCO lite files
-        let oco2_ds = netcdf::open(oco2_lite_file)
-            .map_err(|e| MatchupError::from_nc_error(e, oco2_lite_file.to_owned()))?;
-        let oco2_sid_var = oco2_ds
-            .variable("sounding_id")
-            .ok_or_else(|| MatchupError::NetcdfMissingVar { file: Some(oco2_lite_file.to_owned()), varname: "sounding_id".to_owned() })?;
-        let oco2_sid_units = get_str_attr_with_default(&oco2_sid_var, "units", "YYYYMMDDhhmmssmf".to_owned())?;
-        let oco2_sid_longname = get_str_attr_with_default(&oco2_sid_var, "long_name", "OCO-2 sounding ID from UTC time".to_owned())?;
-
-        let oco3_ds = netcdf::open(oco3_lite_file)
-            .map_err(|e| MatchupError::from_nc_error(e, oco2_lite_file.to_owned()))?;
-        let oco3_sid_var = oco3_ds
-            .variable("sounding_id")
-            .ok_or_else(|| MatchupError::NetcdfMissingVar { file: Some(oco3_lite_file.to_owned()), varname: "sounding_id".to_owned() })?;
-        let oco3_sid_units = get_str_attr_with_default(&oco3_sid_var, "units", "YYYYMMDDhhmmssmf".to_owned())?;
-        let oco3_sid_longname = get_str_attr_with_default(&oco3_sid_var, "long_name", "OCO-2 sounding ID from UTC time".to_owned())?;
-
         // Make the group and variables
         let out_file = utils::nc_file(ds);
         let mut grp = if let Some(group_name) = group_name {
@@ -532,10 +514,10 @@ impl OcoMatchGroups {
             .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
 
         let var_info = [
-            (Self::sounding_id_varname(2), Some(oco2_sid_units.as_str()), Some(oco2_sid_longname.as_str())),
+            (Self::sounding_id_varname(2), Some(SOUNDING_ID_UNITS), Some(SOUNDING_ID_DESCR_OCO2)),
             (Self::file_index_varname(2), None, Some("0-based index for the OCO-2 lite file name variable")),
             (Self::sounding_index_varname(2), None, Some("0-based index for the sounding in the OCO-2 lite file")),
-            (Self::sounding_id_varname(3), Some(oco3_sid_units.as_str()), Some(oco3_sid_longname.as_str())),
+            (Self::sounding_id_varname(3), Some(SOUNDING_ID_UNITS), Some(SOUNDING_ID_DESCR_OCO3)),
             (Self::file_index_varname(3), None, Some("0-based index for the OCO-3 lite file name variable")),
             (Self::sounding_index_varname(3), None, Some("0-based index for the sounding in the OCO-3 lite file")),
         ];
