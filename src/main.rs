@@ -53,6 +53,11 @@ fn find_matches(oco2_lite_file: &Path, oco3_lite_files: Vec<&Path>, flag0_only: 
             Ok(acc.extend(next_locs))
         })?;
 
+    let n_oco3_files = oco3_locs.file_index.iter().max()
+        .and_then(|&n| Some(n+1)).unwrap_or(0);
+    println!("Comparing {} OCO-2 soundings to {} OCO-3 soundings across {} files", 
+             oco2_locs.num_soundings(), oco3_locs.num_soundings(), n_oco3_files);
+
     let matches = oco::match_oco3_to_oco2_parallel(&oco2_locs, &oco3_locs, 100.0, MAX_DELTA_TIME_SECONDS);
     Ok(Output {
         oco2_locations: oco2_locs,

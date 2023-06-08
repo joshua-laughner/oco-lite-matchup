@@ -555,15 +555,6 @@ impl OcoMatchGroups {
             }
         }
 
-        grp.add_attribute("oco2_lite_file_path", oco2_file_string)
-            .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
-        grp.add_attribute("oco2_lite_file_sha256", oco2_checksum)
-            .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
-        grp.add_attribute("oco3_lite_file_path", oco3_file_string)
-            .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
-        grp.add_attribute("oco3_lite_file_sha256", oco3_checksum)
-            .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
-
         Ok(grp)
     }
 
