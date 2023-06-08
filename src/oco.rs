@@ -10,7 +10,7 @@ use rayon::iter::ParallelIterator;
 use serde::Serialize;
 
 use crate::error::MatchupError;
-use crate::utils::{load_nc_var, write_nc_var, filter_by_quality, great_circle_distance, get_str_attr_with_default, self};
+use crate::utils::{load_nc_var, write_nc_var, filter_by_quality, great_circle_distance, self};
 
 const SOUNDING_ID_UNITS: &'static str = "YYYYMMDDhhmmssmf";
 const SOUNDING_ID_DESCR_OCO2: &'static str = "OCO-2 sounding ID";

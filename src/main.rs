@@ -1,13 +1,12 @@
-use std::path::{PathBuf, Path};
+use std::path::Path;
 
 use clap::{Parser, Subcommand, Args};
-use error::MatchupError;
-use oco::OcoGeo;
+use oco_lite_matchup::error::{self, MatchupError};
+use oco_lite_matchup::config::RunOneArgs;
+use oco_lite_matchup::oco::{self, OcoGeo};
 use serde::Serialize;
 
-mod error;
-mod utils;
-mod oco;
+
 
 const MAX_DELTA_TIME_SECONDS: f64 = 43_200.0; // 12 hours
 
@@ -110,33 +109,6 @@ struct MainArgs {
 enum Commands {
     /// Run a matchup between a single OCO-2 file and one or more OCO-3 files
     One(RunOneArgs)
-}
-
-#[derive(Debug, Args)]
-struct RunOneArgs {
-    /// Path to write the output netCDF file containing the matched groups of soundings
-    output_file: PathBuf,
-
-    /// Path to the OCO-2 lite file to match up with OCO-3
-    oco2_lite_file: PathBuf,
-    
-    /// Path to the OCO-3 lite file(s) to match up with OCO-2. You must specify at least one.
-    #[clap(required = true)]
-    oco3_lite_files: Vec<PathBuf>,
-    
-    /// Set this flag to only include good quality soundings when calculating the matches
-    #[clap(short='0', long)]
-    flag0_only: bool,
-
-    /// Give this argument with a path to save a netCDF file containing an exact map of OCO-2 to OCO-3 soundings.
-    /// Note: this can be 100s of MB
-    #[clap(short='f', long)]
-    save_full_matches_as: Option<PathBuf>,
-
-    /// Give this argument with a path to a file written out with the --save-full-matches-as command to
-    /// read in the full matches rather than calculating them from the OCO-2/3 lite files.
-    #[clap(short='i', long)]
-    read_full_matches: Option<PathBuf>,
 }
 
 #[derive(Debug, Serialize)]
