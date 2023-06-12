@@ -1,9 +1,11 @@
+use std::io::Read;
 use std::path::Path;
 
-use clap::{Parser, Subcommand, Args};
+use clap::{Parser, Subcommand};
 use oco_lite_matchup::error::{self, MatchupError};
-use oco_lite_matchup::config::RunOneArgs;
+use oco_lite_matchup::config::{RunOneArgs, RunMultiArgs, RunMultiConfig};
 use oco_lite_matchup::oco::{self, OcoGeo};
+use rayon::prelude::*;
 use serde::Serialize;
 
 
@@ -25,9 +27,18 @@ fn main() -> Result<(), error::MatchupError> {
                 &subargs.output_file, 
                 subargs.flag0_only, 
                 subargs.save_full_matches_as.as_deref(), 
-                subargs.read_full_matches.as_deref()
+                subargs.read_full_matches.as_deref(),
+                true
             )
         },
+
+        Commands::Multi(subargs) => {
+            let mut buf = String::new();
+            let mut f = std::fs::File::open(&subargs.config_file)?;
+            f.read_to_string(&mut buf)?;
+            let cfg: RunMultiConfig = toml::from_str(&buf)?;
+            driver_multi_oco2_file(&cfg.matchups)
+        }
     }
     
 }
@@ -38,7 +49,8 @@ fn driver_one_oco2_file<P: AsRef<Path>>(
     output_file: &Path,
     flag0_only: bool,
     save_full_matches_as: Option<&Path>,
-    read_full_matches: Option<&Path>
+    read_full_matches: Option<&Path>,
+    show_progress: bool
 ) -> Result<(), MatchupError> {
     let matched_soundings = if let Some(full_matches_in) = read_full_matches {
         println!("Reading previous matched soundings from {}", full_matches_in.display());
@@ -50,7 +62,7 @@ fn driver_one_oco2_file<P: AsRef<Path>>(
         oco::OcoMatches::from_nc_group(&grp)?
     } else {
         println!("Looking for matches between OCO-2 and -3");
-        let full_matches = find_matches(oco2_lite_file, oco3_lite_files, flag0_only)?;
+        let full_matches = find_matches(oco2_lite_file, oco3_lite_files, flag0_only, show_progress)?;
         if let Some(full_match_file) = save_full_matches_as {
             println!("Saving full match netCDF file: {}", full_match_file.display());
             full_matches.save_netcdf(&full_match_file)?;
@@ -64,7 +76,34 @@ fn driver_one_oco2_file<P: AsRef<Path>>(
     Ok(())
 }
 
-fn find_matches<P: AsRef<Path>>(oco2_lite_file: &Path, oco3_lite_files: &[P], flag0_only: bool) -> Result<Output, MatchupError> {
+fn driver_multi_oco2_file(matchups: &[RunOneArgs]) -> Result<(), MatchupError> {
+    let errs: Vec<MatchupError> = matchups.par_iter()
+        .filter_map(|m| {
+            let res = driver_one_oco2_file(
+                &m.oco2_lite_file, 
+                &m.oco3_lite_files, 
+                &m.output_file,
+                m.flag0_only, 
+                m.save_full_matches_as.as_deref(),
+                m.read_full_matches.as_deref(),
+                false
+            );
+
+            if let Err(e) = res {
+                Some(e)
+            } else {
+                None
+            }
+        }).collect();  
+
+    if errs.is_empty() {
+        Ok(())
+    } else {
+        Err(MatchupError::MultipleErrors(errs))
+    }
+}
+
+fn find_matches<P: AsRef<Path>>(oco2_lite_file: &Path, oco3_lite_files: &[P], flag0_only: bool, show_progress: bool) -> Result<Output, MatchupError> {
     let oco2_locs = oco::OcoGeo::load_lite_file(oco2_lite_file, flag0_only)?;
     let oco3_locs = oco3_lite_files.into_iter()
         .fold(Ok(OcoGeo::default()), |acc: Result<OcoGeo, MatchupError>, el| {
@@ -78,7 +117,7 @@ fn find_matches<P: AsRef<Path>>(oco2_lite_file: &Path, oco3_lite_files: &[P], fl
     println!("Comparing {} OCO-2 soundings to {} OCO-3 soundings across {} files", 
              oco2_locs.num_soundings(), oco3_locs.num_soundings(), n_oco3_files);
 
-    let matches = oco::match_oco3_to_oco2_parallel(&oco2_locs, &oco3_locs, 100.0, MAX_DELTA_TIME_SECONDS);
+    let matches = oco::match_oco3_to_oco2_parallel(&oco2_locs, &oco3_locs, 100.0, MAX_DELTA_TIME_SECONDS, show_progress);
     Ok(Output {
         oco2_locations: oco2_locs,
         oco3_locations: oco3_locs,
@@ -108,7 +147,10 @@ struct MainArgs {
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Run a matchup between a single OCO-2 file and one or more OCO-3 files
-    One(RunOneArgs)
+    One(RunOneArgs),
+    /// Run a matchup between multiple OCO-2 files and their corresponding OCO-3 files
+    /// as specified in a TOML file.
+    Multi(RunMultiArgs)
 }
 
 #[derive(Debug, Serialize)]

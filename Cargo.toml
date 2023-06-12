@@ -5,10 +5,15 @@ edition = "2021"
 
 [lib]
 
+[[bin]]
+name = "make-config"
+path = "src/bin/make_config.rs"
+
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+chrono = "0.4.26"
 clap = { version = "4.3.0", features = ["derive"] }
 hex = "0.4.3"
 indicatif = { version = "0.17.3", features = ["rayon"] }

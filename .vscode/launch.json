@@ -7,7 +7,7 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug",
+            "name": "Debug main",
             "args": ["-f", "test_output_par2.nc4",
                      "groups_test_par2.nc4",
                      "/home/laughner/scratch/oco2_LtCO2_230224_B11014Ar_230405191336s.nc4",
@@ -17,6 +17,27 @@
                 "args": [
                     "build",
                     "--bin=oco-lite-matchup"
+                ],
+                "filter": {
+                    "kind": "bin"
+                }
+            }
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug make config",
+            "args": ["/oco2/product/scf/Lite/B11014Ar/r02/%Y/%m/%d/LtCO2",
+                     "/data/oco3/scf/product/Lite_B10400Br_r02/%Y/%m/%d/LtCO2/",
+                     "2023-02-23",
+                     "2023-02-28",
+                     "1",
+                     "test_config.toml"],
+            "cwd": "${workspaceFolder}",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=make-config"
                 ],
                 "filter": {
                     "kind": "bin"

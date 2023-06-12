@@ -1,0 +1,59 @@
+[[matchups]]
+output_file = "oco_lite_matches_20230223.nc4"
+oco2_lite_file = "/oco2/product/scf/Lite/B11014Ar/r02/2023/02/23/LtCO2/oco2_LtCO2_230223_B11014Ar_230405191309s.nc4"
+oco3_lite_files = [
+    "/data/oco3/scf/product/Lite_B10400Br_r02/2023/02/22/LtCO2/oco3_LtCO2_230222_B10400Br_230414162255s.nc4",
+    "/data/oco3/scf/product/Lite_B10400Br_r02/2023/02/23/LtCO2/oco3_LtCO2_230223_B10400Br_230414162255s.nc4",
+    "/data/oco3/scf/product/Lite_B10400Br_r02/2023/02/24/LtCO2/oco3_LtCO2_230224_B10400Br_230414162256s.nc4",
+]
+flag0_only = false
+
+[[matchups]]
+output_file = "oco_lite_matches_20230224.nc4"
+oco2_lite_file = "/oco2/product/scf/Lite/B11014Ar/r02/2023/02/24/LtCO2/oco2_LtCO2_230224_B11014Ar_230405191336s.nc4"
+oco3_lite_files = [
+    "/data/oco3/scf/product/Lite_B10400Br_r02/2023/02/23/LtCO2/oco3_LtCO2_230223_B10400Br_230414162255s.nc4",
+    "/data/oco3/scf/product/Lite_B10400Br_r02/2023/02/24/LtCO2/oco3_LtCO2_230224_B10400Br_230414162256s.nc4",
+    "/data/oco3/scf/product/Lite_B10400Br_r02/2023/02/25/LtCO2/oco3_LtCO2_230225_B10400Br_230414162317s.nc4",
+]
+flag0_only = false
+
+[[matchups]]
+output_file = "oco_lite_matches_20230225.nc4"
+oco2_lite_file = "/oco2/product/scf/Lite/B11014Ar/r02/2023/02/25/LtCO2/oco2_LtCO2_230225_B11014Ar_230405191413s.nc4"
+oco3_lite_files = [
+    "/data/oco3/scf/product/Lite_B10400Br_r02/2023/02/24/LtCO2/oco3_LtCO2_230224_B10400Br_230414162256s.nc4",
+    "/data/oco3/scf/product/Lite_B10400Br_r02/2023/02/25/LtCO2/oco3_LtCO2_230225_B10400Br_230414162317s.nc4",
+    "/data/oco3/scf/product/Lite_B10400Br_r02/2023/02/26/LtCO2/oco3_LtCO2_230226_B10400Br_230414162322s.nc4",
+]
+flag0_only = false
+
+[[matchups]]
+output_file = "oco_lite_matches_20230226.nc4"
+oco2_lite_file = "/oco2/product/scf/Lite/B11014Ar/r02/2023/02/26/LtCO2/oco2_LtCO2_230226_B11014Ar_230405191438s.nc4"
+oco3_lite_files = [
+    "/data/oco3/scf/product/Lite_B10400Br_r02/2023/02/25/LtCO2/oco3_LtCO2_230225_B10400Br_230414162317s.nc4",
+    "/data/oco3/scf/product/Lite_B10400Br_r02/2023/02/26/LtCO2/oco3_LtCO2_230226_B10400Br_230414162322s.nc4",
+    "/data/oco3/scf/product/Lite_B10400Br_r02/2023/02/27/LtCO2/oco3_LtCO2_230227_B10400Br_230414162356s.nc4",
+]
+flag0_only = false
+
+[[matchups]]
+output_file = "oco_lite_matches_20230227.nc4"
+oco2_lite_file = "/oco2/product/scf/Lite/B11014Ar/r02/2023/02/27/LtCO2/oco2_LtCO2_230227_B11014Ar_230405191514s.nc4"
+oco3_lite_files = [
+    "/data/oco3/scf/product/Lite_B10400Br_r02/2023/02/26/LtCO2/oco3_LtCO2_230226_B10400Br_230414162322s.nc4",
+    "/data/oco3/scf/product/Lite_B10400Br_r02/2023/02/27/LtCO2/oco3_LtCO2_230227_B10400Br_230414162356s.nc4",
+    "/data/oco3/scf/product/Lite_B10400Br_r02/2023/02/28/LtCO2/oco3_LtCO2_230228_B10400Br_230414162407s.nc4",
+]
+flag0_only = false
+
+[[matchups]]
+output_file = "oco_lite_matches_20230228.nc4"
+oco2_lite_file = "/oco2/product/scf/Lite/B11014Ar/r02/2023/02/28/LtCO2/oco2_LtCO2_230228_B11014Ar_230405191538s.nc4"
+oco3_lite_files = [
+    "/data/oco3/scf/product/Lite_B10400Br_r02/2023/02/27/LtCO2/oco3_LtCO2_230227_B10400Br_230414162356s.nc4",
+    "/data/oco3/scf/product/Lite_B10400Br_r02/2023/02/28/LtCO2/oco3_LtCO2_230228_B10400Br_230414162407s.nc4",
+    "/data/oco3/scf/product/Lite_B10400Br_r02/2023/03/01/LtCO2/oco3_LtCO2_230301_B10400Br_230521170705s.nc4",
+]
+flag0_only = false

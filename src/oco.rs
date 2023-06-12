@@ -555,7 +555,7 @@ impl OcoMatchGroups {
     }
 }
 
-pub fn match_oco3_to_oco2_parallel(oco2: &OcoGeo, oco3: &OcoGeo, max_dist: f32, max_dt: f64) -> OcoMatches {
+pub fn match_oco3_to_oco2_parallel(oco2: &OcoGeo, oco3: &OcoGeo, max_dist: f32, max_dt: f64, show_progress: bool) -> OcoMatches {
     let n_oco2 = oco2.longitude.len();
     let oco2_inds = Array1::from_iter(0..n_oco2);
     
@@ -569,25 +569,37 @@ pub fn match_oco3_to_oco2_parallel(oco2: &OcoGeo, oco3: &OcoGeo, max_dist: f32, 
         .and(&oco2.timestamp)
         .into_par_iter();
 
-    matchups.par_extend(
-        par_it
-        .progress_count(n_oco2 as u64)
-        .filter_map(|(&i_oco2, &fi_oco2, &sid_oco2, &lon_oco2, &lat_oco2, &ts_oco2)| { 
-            let oco3 = oco3.clone();
-            let this_result = make_one_oco_match_vec(fi_oco2, i_oco2, sid_oco2, lon_oco2, lat_oco2, ts_oco2,&oco3, max_dist, max_dt);
-            if this_result.is_empty() {
-                None
-            }else{
-                Some(this_result)
+    if show_progress {
+        matchups.par_extend(
+            par_it
+            .progress_count(n_oco2 as u64)
+            .filter_map(|tup| { 
+                parallel_helper(tup, max_dist, max_dt, oco3)
             }
-        }
-    ));
+        ));
+    } else {
+        matchups.par_extend(
+            par_it
+            .filter_map(|tup| { 
+                parallel_helper(tup, max_dist, max_dt, oco3)
+            }
+        ));
+    }
 
     println!("Number of matchups = {}", matchups.len());
     
     OcoMatches::from_matches(matchups, oco2.lite_files.clone(), oco3.lite_files.clone())
 }
 
+fn parallel_helper(tup: (&usize, &u8, &u64, &f32, &f32, &f64), max_dist: f32, max_dt: f64, oco3: &OcoGeo) -> Option<Match2to3> {
+    let (&i_oco2, &fi_oco2, &sid_oco2, &lon_oco2, &lat_oco2, &ts_oco2) = tup;
+    let this_result = make_one_oco_match_vec(fi_oco2, i_oco2, sid_oco2, lon_oco2, lat_oco2, ts_oco2,&oco3, max_dist, max_dt);
+    if this_result.is_empty() {
+        None
+    }else{
+        Some(this_result)
+    }
+}
 
 #[derive(Debug, Serialize)]
 struct Match2to3 {

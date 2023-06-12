@@ -8,7 +8,10 @@ pub enum MatchupError {
     NetcdfWrongAttrType{file: Option<PathBuf>, varname: String, attname: String, expected: &'static str},
     NetcdfShapeError{file: Option<PathBuf>, varname: String, nd_error: ndarray::ShapeError},
     IOError(std::io::Error),
+    ConfigError(toml::de::Error),
+    ConfigWriteError(toml::ser::Error),
     InternalError(String),
+    MultipleErrors(Vec<Self>)
 }
 
 impl MatchupError {
@@ -28,7 +31,10 @@ impl MatchupError {
             MatchupError::NetcdfWrongAttrType { file: _, varname, attname, expected } => Self::NetcdfWrongAttrType { file: Some(p), varname, attname, expected },
             MatchupError::NetcdfShapeError { file: _, varname, nd_error } => Self::NetcdfShapeError { file: Some(p), varname, nd_error },
             MatchupError::IOError(e) => Self::IOError(e),
+            MatchupError::ConfigError(_) => self,
+            MatchupError::ConfigWriteError(_) => self,
             MatchupError::InternalError(s) => Self::InternalError(s),
+            MatchupError::MultipleErrors(_) => self
         }
     }
 }
@@ -72,7 +78,16 @@ impl Display for MatchupError {
                 }
             },
             MatchupError::IOError(e) => write!(f, "Error reading a file: {e}"),
+            MatchupError::ConfigError(e) => write!(f, "Error reading configuration: {e}"),
+            MatchupError::ConfigWriteError(e) => write!(f, "Error writing configuration: {e}"),
             MatchupError::InternalError(s) => write!(f, "Internal error in matchup code, cause: {s}"),
+            MatchupError::MultipleErrors(errs) => {
+                writeln!(f, "{} matchups had errors. The errors were:", errs.len())?;
+                for (i, e) in errs.iter().enumerate() {
+                    writeln!(f, "{}. {e}", i+1)?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -86,5 +101,17 @@ impl From<netcdf::error::Error> for MatchupError {
 impl From<std::io::Error> for MatchupError {
     fn from(value: std::io::Error) -> Self {
         Self::IOError(value)
+    }
+}
+
+impl From<toml::de::Error> for MatchupError {
+    fn from(value: toml::de::Error) -> Self {
+        Self::ConfigError(value)
+    }
+}
+
+impl From<toml::ser::Error> for MatchupError {
+    fn from(value: toml::ser::Error) -> Self {
+        Self::ConfigWriteError(value)
     }
 }

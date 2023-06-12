@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
 use clap::Args;
+use serde::{Serialize, Deserialize};
 
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Serialize, Deserialize)]
 pub struct RunOneArgs {
     /// Path to write the output netCDF file containing the matched groups of soundings
     pub output_file: PathBuf,
@@ -28,4 +29,15 @@ pub struct RunOneArgs {
     /// read in the full matches rather than calculating them from the OCO-2/3 lite files.
     #[clap(short='i', long)]
     pub read_full_matches: Option<PathBuf>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RunMultiConfig {
+    pub matchups: Vec<RunOneArgs>
+}
+
+#[derive(Debug, Args)]
+pub struct RunMultiArgs {
+    /// Path to the TOML configuration file that specifies how to run multiple matchups
+    pub config_file: PathBuf
 }
