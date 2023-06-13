@@ -1,4 +1,4 @@
-use std::{path::{PathBuf, Path}, io::Read};
+use std::{path::{PathBuf, Path}, io::Read, ops::{Add, AddAssign}};
 
 use ndarray::{Array1, ArrayView1, Ix1};
 
@@ -159,4 +159,53 @@ pub fn file_sha256(file: &Path) -> std::io::Result<String> {
 
     let checksum = hex::encode(hasher.finalize());
     Ok(checksum)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RunningMean<F: num_traits::Float + num_traits::NumAssign> {
+    val: F,
+    weight: F
+}
+
+impl<F: num_traits::Float + num_traits::NumAssign> RunningMean<F> {
+    pub fn new() -> Self {
+        Self { val: F::zero(), weight: F::zero() }
+    }
+
+    pub fn from_slice(s: &[F]) -> Self {
+        let mut me = Self::new();
+        for &v in s {
+            me.add_value(v);
+        }
+        me
+    }
+
+    pub fn add_value(&mut self, v: F) {
+        self.val += v;
+        self.weight += F::one();
+    }
+
+    pub fn add_value_with_weight(&mut self, v: F, w: F) {
+        self.val += v;
+        self.weight += w;
+    }
+
+    pub fn mean(&self) -> F {
+        self.val / self.weight
+    }
+}
+
+impl<F: num_traits::Float + num_traits::NumAssign> Add for RunningMean<F> {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self { val: self.val + rhs.val, weight: self.weight + rhs.weight }
+    }
+}
+
+impl<F: num_traits::Float + num_traits::NumAssign> AddAssign for RunningMean<F> {
+    fn add_assign(&mut self, rhs: Self) {
+        self.val += rhs.val;
+        self.weight += rhs.weight;
+    }
 }

@@ -14,6 +14,8 @@ const MAX_DELTA_TIME_SECONDS: f64 = 43_200.0; // 12 hours
 
 // TODO: Modify to accept multiple OCO-2 lite files (for different modes? not sure if needed)
 // TODO: Make distance and time input parameters
+// TODO: make the two progress bars (initial matchup and grouping) use multibar via
+//  progess_with (https://docs.rs/indicatif/latest/indicatif/trait.ParallelProgressIterator.html#tymethod.progress_with)
 fn main() -> Result<(), error::MatchupError> {
     let args = MainArgs::parse();
     println!("Initializing thread pool with {} threads", args.nprocs);

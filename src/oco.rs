@@ -10,7 +10,7 @@ use rayon::iter::ParallelIterator;
 use serde::Serialize;
 
 use crate::error::MatchupError;
-use crate::utils::{load_nc_var, write_nc_var, filter_by_quality, great_circle_distance, self};
+use crate::utils::{load_nc_var, write_nc_var, filter_by_quality, great_circle_distance, self, RunningMean};
 
 const SOUNDING_ID_UNITS: &'static str = "YYYYMMDDhhmmssmf";
 const SOUNDING_ID_DESCR_OCO2: &'static str = "OCO-2 sounding ID";
@@ -140,6 +140,10 @@ impl OcoMatches {
         "distance"
     }
 
+    fn time_diff_varname() -> &'static str {
+        "time_difference"
+    }
+
     fn from_matches(mut sounding_matches: Vec<Match2to3>, oco2_files: Vec<PathBuf>, oco3_files: Vec<PathBuf>) -> Self {
         // Ensure that the matches are ordered by OCO-2 sounding ID, this avoids issues with groups of matches getting
         // split up because we examine them out of order
@@ -216,6 +220,7 @@ impl OcoMatches {
         let oco3_sounding_indices = load_2d_var::<u64>(grp, Self::oco3_index_varname())?;
         let oco3_sounding_ids = load_2d_var::<u64>(grp, Self::oco3_sounding_id_varname())?;
         let distances = load_2d_var::<f32>(grp, Self::dist_varname())?;
+        let time_diffs = load_2d_var::<f32>(grp, Self::time_diff_varname())?;
 
         let it = izip!(
             oco2_file_indices.into_iter(),
@@ -224,15 +229,16 @@ impl OcoMatches {
             oco3_file_indices.into_iter(),
             oco3_sounding_indices.into_iter(),
             oco3_sounding_ids.into_iter(),
-            distances.into_iter()
+            distances.into_iter(),
+            time_diffs.into_iter()
         );
 
         let oco_matches: Vec<Match2to3> = it
-            .map(|(oco2_fi, oco2_i, oco2_sid, oco3_fi, oco3_i, oco3_sid, dist)| {
+            .map(|(oco2_fi, oco2_i, oco2_sid, oco3_fi, oco3_i, oco3_sid, dist, dt)| {
                 Match2to3 { 
                     oco2_file_index: oco2_fi, oco2_sounding_index: oco2_i, oco2_sounding_id: oco2_sid,
                     oco3_file_indices: oco3_fi, oco3_sounding_indices: oco3_i, oco3_sounding_ids: oco3_sid,
-                    distance_km: dist
+                    distance_km: dist, time_diff_s: dt
                 }
             }).collect();
 
@@ -265,6 +271,7 @@ impl OcoMatches {
         self.write_2d_variable(grp, Self::oco3_index_varname(), None, Some("0-based index of the sounding within its lite file"), |m| m.oco3_sounding_indices.as_slice(), u64::MAX)?;
         self.write_2d_variable(grp, Self::oco3_sounding_id_varname(), Some(SOUNDING_ID_UNITS), Some(SOUNDING_ID_DESCR_OCO3), |m| m.oco3_sounding_ids.as_slice(), u64::MAX)?;
         self.write_2d_variable(grp, Self::dist_varname(), Some("km"), Some("Distance between the OCO-2 and OCO-3 sounding"), |m| m.distance_km.as_slice(), f32::MAX)?;
+        self.write_2d_variable(grp, Self::time_diff_varname(), Some("s"), Some("Time difference between the OCO-2 and OCO-3 sounding in seconds"), |m| m.time_diff_s.as_slice(), f32::MAX)?;
         Ok(())
     }
 
@@ -397,6 +404,8 @@ pub struct OcoMatchGroups {
     match_sets: Vec<(HashSet<u64>, HashSet<u64>)>,
     oco2_sounding_indices: HashMap<u64, (u8, u64)>,
     oco3_sounding_indices: HashMap<u64, (u8, u64)>,
+    distances: HashMap<u64, RunningMean<f32>>,
+    time_diffs: HashMap<u64, RunningMean<f32>>
 }
 
 impl OcoMatchGroups {
@@ -413,6 +422,23 @@ impl OcoMatchGroups {
             let oco3_sid_min = *oco3_inds.iter().min().expect("Expected at least one OCO-3 index in every hash set");
             let oco3_sid_max = *oco3_inds.iter().max().expect("Expected at least one OCO-3 index in every hash set");
 
+            // Calculate the mean distance and time difference between OCO-2 and -3
+            let group_mean_dist = oco2_inds.iter()
+                .try_fold(RunningMean::new(), |mut acc, k| {
+                    let dx = self.distances.get(k)
+                        .ok_or_else(|| MatchupError::InternalError(format!("OCO-2 sounding ID {k} not stored in the distance hash map")))?;
+                    acc += *dx;
+                    Ok::<RunningMean<f32>, MatchupError>(acc)
+                })?.mean();
+
+            let group_mean_dt = oco2_inds.iter()
+                .try_fold(RunningMean::new(), |mut acc, k| {
+                    let dx = self.time_diffs.get(k)
+                        .ok_or_else(|| MatchupError::InternalError(format!("OCO-2 sounding ID {k} not stored in the time difference hash map")))?;
+                    acc += *dx;
+                    Ok::<RunningMean<f32>, MatchupError>(acc)
+                })?.mean();
+
             // Get the corresponding file and sounding indices
             let &(oco2_fid_min, oco2_idx_min) = self.oco2_sounding_indices.get(&oco2_sid_min)
                 .ok_or_else(|| MatchupError::InternalError(format!("OCO-2 sounding ID {oco2_sid_min} not stored in the index hashmap")))?;
@@ -423,6 +449,7 @@ impl OcoMatchGroups {
             let &(oco3_fid_max, oco3_idx_max) = self.oco3_sounding_indices.get(&oco3_sid_max)
                 .ok_or_else(|| MatchupError::InternalError(format!("OCO-3 sounding ID {oco3_sid_max} not stored in the index hashmap")))?;
 
+            let scalar_extents: Extents = [i].into();
             let extents: Extents = [i..i+1, 0..2].into();
 
             // Writing OCO-2 variables
@@ -462,6 +489,19 @@ impl OcoMatchGroups {
                 .put_values(&[oco3_fid_min, oco3_fid_max], &extents)
                 .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
             }
+
+            // Writing distance and time variables
+            {
+                grp.variable_mut(Self::distance_varname()).expect("Distance variable must be initialized first")
+                .put_values(&[group_mean_dist], &scalar_extents)
+                .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
+            }
+
+            {
+                grp.variable_mut(Self::time_diff_varname()).expect("Time difference variable must be initialized first")
+                .put_values(&[group_mean_dt], &scalar_extents)
+                .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
+            }
         }
 
 
@@ -496,6 +536,14 @@ impl OcoMatchGroups {
         format!("oco{instrument}_file_index")
     }
 
+    fn distance_varname() -> &'static str {
+        "mean_oco2_oco3_distance"
+    }
+
+    fn time_diff_varname() -> &'static str {
+        "mean_oco2_oco3_time_difference"
+    }
+
     fn setup_nc_group<'f>(&'f self, ds: &'f mut netcdf::MutableFile, group_name: Option<&str>) -> Result<netcdf::GroupMut, MatchupError> {
         
         // Make the group and variables
@@ -513,18 +561,28 @@ impl OcoMatchGroups {
         grp.add_dimension(Self::start_end_dim(), 2)
             .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
 
+        let dims1 = vec![Self::match_group_dim()];
+        let dims2 = vec![Self::match_group_dim(), Self::start_end_dim()];
+
         let var_info = [
-            (Self::sounding_id_varname(2), Some(SOUNDING_ID_UNITS), Some(SOUNDING_ID_DESCR_OCO2)),
-            (Self::file_index_varname(2), None, Some("0-based index for the OCO-2 lite file name variable")),
-            (Self::sounding_index_varname(2), None, Some("0-based index for the sounding in the OCO-2 lite file")),
-            (Self::sounding_id_varname(3), Some(SOUNDING_ID_UNITS), Some(SOUNDING_ID_DESCR_OCO3)),
-            (Self::file_index_varname(3), None, Some("0-based index for the OCO-3 lite file name variable")),
-            (Self::sounding_index_varname(3), None, Some("0-based index for the sounding in the OCO-3 lite file")),
+            (Self::sounding_id_varname(2), &dims2, false, Some(SOUNDING_ID_UNITS), Some(SOUNDING_ID_DESCR_OCO2)),
+            (Self::file_index_varname(2), &dims2, false, None, Some("0-based index for the OCO-2 lite file name variable")),
+            (Self::sounding_index_varname(2), &dims2, false, None, Some("0-based index for the sounding in the OCO-2 lite file")),
+            (Self::sounding_id_varname(3), &dims2, false, Some(SOUNDING_ID_UNITS), Some(SOUNDING_ID_DESCR_OCO3)),
+            (Self::file_index_varname(3), &dims2, false, None, Some("0-based index for the OCO-3 lite file name variable")),
+            (Self::sounding_index_varname(3), &dims2, false, None, Some("0-based index for the sounding in the OCO-3 lite file")),
+            (Self::distance_varname().to_owned(), &dims1, true, Some("km"), Some("Mean distance between the matched OCO-2 and -3 soundings. Note that this is only calculated for soundings meeting the coincidence criteria, which may not be all soundings in the group.")),
+            (Self::time_diff_varname().to_owned(), &dims1, true, Some("s"), Some("Mean time difference (in seconds) between the matched OCO-2 and -3 soundings. Note that this is only calculated for soundings meeting the coincidence criteria, which may not be all soundings in the group.")),
         ];
 
-        for (varname, units, descr) in var_info {
-            let mut var = grp.add_variable::<u64>(&varname, &[Self::match_group_dim(), Self::start_end_dim()])
-                .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
+        for (varname, dims, is_float, units, descr) in var_info {
+            let mut var = if !is_float {
+                grp.add_variable::<u64>(&varname, dims)
+                .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?
+            } else {
+                grp.add_variable::<f32>(&varname, dims)
+                .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?
+            };
 
             if let Some(units) = units {
                 var.add_attribute("units", units)
@@ -609,19 +667,30 @@ struct Match2to3 {
     oco3_file_indices: Vec<u8>,
     oco3_sounding_indices: Vec<u64>,
     oco3_sounding_ids: Vec<u64>,
-    distance_km: Vec<f32>
+    distance_km: Vec<f32>,
+    time_diff_s: Vec<f32>
 }
 
 impl Match2to3 {
     fn new(oco2_file_index: u8, oco2_sounding_index: u64, oco2_sounding_id: u64) -> Self {
-        Self { oco2_file_index, oco2_sounding_index, oco2_sounding_id, oco3_file_indices: Vec::new(), oco3_sounding_indices: Vec::new(), oco3_sounding_ids: Vec::new(), distance_km: Vec::new() }
+        Self { 
+            oco2_file_index, 
+            oco2_sounding_index, 
+            oco2_sounding_id, 
+            oco3_file_indices: Vec::new(),
+            oco3_sounding_indices: Vec::new(), 
+            oco3_sounding_ids: Vec::new(), 
+            distance_km: Vec::new(),
+            time_diff_s: Vec::new()
+        }
     }
 
-    fn add_oco3_match(&mut self, file_idx_oco3: u8, idx_oco3: usize, sid_oco3: u64, dist: f32) {
+    fn add_oco3_match(&mut self, file_idx_oco3: u8, idx_oco3: usize, sid_oco3: u64, dist: f32, dt_sec: f32) {
         self.oco3_file_indices.push(file_idx_oco3);
         self.oco3_sounding_indices.push(idx_oco3 as u64);
         self.oco3_sounding_ids.push(sid_oco3);
         self.distance_km.push(dist);
+        self.time_diff_s.push(dt_sec);
     }
 
     fn is_empty(&self) -> bool {
@@ -649,10 +718,10 @@ fn make_one_oco_match_vec(file_idx_oco2: u8,
 
     for (idx_oco3, (&file_idx_oco3, &sid_oco3, &lon_oco3, &lat_oco3, &ts_oco3)) in it {
         let this_dist = great_circle_distance(lon_oco2, lat_oco2, lon_oco3, lat_oco3);
-        let this_delta_time = (ts_oco2 - ts_oco3).abs();
+        let this_delta_time = ts_oco2 - ts_oco3;
 
-        if this_dist <= max_dist && this_delta_time < max_dt {
-            oco3_matches.add_oco3_match(file_idx_oco3, idx_oco3, sid_oco3, this_dist);
+        if this_dist <= max_dist && this_delta_time.abs() < max_dt {
+            oco3_matches.add_oco3_match(file_idx_oco3, idx_oco3, sid_oco3, this_dist, this_delta_time as f32);
         }
     }
 
@@ -670,8 +739,16 @@ fn setup_progress_bar(n_match: u64, action: &str) -> ProgressBar {
 }
 
 pub fn identify_groups_from_matched_soundings(matched_soundings: OcoMatches) -> OcoMatchGroups {
-    fn update_sounding_inds(this_match: &Match2to3, oco2_inds: &mut HashMap<u64, (u8, u64)>, oco3_inds: &mut HashMap<u64, (u8, u64)>) {
+    fn update_sounding_inds(
+        this_match: &Match2to3, 
+        oco2_inds: &mut HashMap<u64, (u8, u64)>, 
+        oco3_inds: &mut HashMap<u64, (u8, u64)>, 
+        dist_mean: &mut HashMap<u64, RunningMean<f32>>,
+        dt_mean: &mut HashMap<u64, RunningMean<f32>>
+    ) {
         oco2_inds.insert(this_match.oco2_sounding_id, (this_match.oco2_file_index, this_match.oco2_sounding_index));
+        dist_mean.insert(this_match.oco2_sounding_id, RunningMean::from_slice(&this_match.distance_km));
+        dt_mean.insert(this_match.oco2_sounding_id, RunningMean::from_slice(&this_match.time_diff_s));
         for (&sid, &fid, &idx) in izip!(this_match.oco3_sounding_ids.iter(), this_match.oco3_file_indices.iter(), this_match.oco3_sounding_indices.iter()) {
             oco3_inds.insert(sid, (fid, idx));
         }
@@ -680,6 +757,8 @@ pub fn identify_groups_from_matched_soundings(matched_soundings: OcoMatches) -> 
     let mut match_sets: Vec<(HashSet<u64>, HashSet<u64>)> = Vec::new();
     let mut oco2_sounding_indices = HashMap::new();
     let mut oco3_sounding_indices = HashMap::new();
+    let mut mean_dists = HashMap::new();
+    let mut mean_time_diffs = HashMap::new();
 
     // It's important to iterate over ordered keys: when I let this be unordered, some groups that
     // should be one got split up, I think because the (non-overlapping) ends got put into separate 
@@ -706,7 +785,7 @@ pub fn identify_groups_from_matched_soundings(matched_soundings: OcoMatches) -> 
             ));
         }
 
-        update_sounding_inds(&m, &mut oco2_sounding_indices, &mut oco3_sounding_indices);
+        update_sounding_inds(&m, &mut oco2_sounding_indices, &mut oco3_sounding_indices, &mut mean_dists, &mut mean_time_diffs);
     }
     pb.finish_with_message("  -> All matches grouped.");
 
@@ -714,5 +793,7 @@ pub fn identify_groups_from_matched_soundings(matched_soundings: OcoMatches) -> 
                      oco3_lite_files: matched_soundings.oco3_files.clone(),
                      match_sets,
                      oco2_sounding_indices,
-                     oco3_sounding_indices }
+                     oco3_sounding_indices,
+                     distances: mean_dists,
+                     time_diffs: mean_time_diffs }
 }
