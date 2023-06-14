@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, Arc};
 
-use indicatif::{ProgressBar, ProgressStyle, ParallelProgressIterator};
+// use indicatif::{ProgressBar, ProgressStyle, ParallelProgressIterator};
+use indicatif::ParallelProgressIterator;
 use itertools::{izip, Itertools};
 use ndarray::{Array1, Ix1, Ix2, concatenate, Axis, Array2, Array};
 use netcdf::extent::Extents;
@@ -10,7 +12,7 @@ use rayon::iter::ParallelIterator;
 use serde::Serialize;
 
 use crate::error::MatchupError;
-use crate::utils::{load_nc_var, write_nc_var, filter_by_quality, great_circle_distance, self, RunningMean};
+use crate::utils::{load_nc_var, write_nc_var, filter_by_quality, great_circle_distance, self, RunningMean, ShowProgress};
 
 const SOUNDING_ID_UNITS: &'static str = "YYYYMMDDhhmmssmf";
 const SOUNDING_ID_DESCR_OCO2: &'static str = "OCO-2 sounding ID";
@@ -613,7 +615,7 @@ impl OcoMatchGroups {
     }
 }
 
-pub fn match_oco3_to_oco2_parallel(oco2: &OcoGeo, oco3: &OcoGeo, max_dist: f32, max_dt: f64, show_progress: bool) -> OcoMatches {
+pub fn match_oco3_to_oco2_parallel(oco2: &OcoGeo, oco3: &OcoGeo, max_dist: f32, max_dt: f64, show_progress: ShowProgress) -> OcoMatches {
     let n_oco2 = oco2.longitude.len();
     let oco2_inds = Array1::from_iter(0..n_oco2);
     
@@ -627,21 +629,54 @@ pub fn match_oco3_to_oco2_parallel(oco2: &OcoGeo, oco3: &OcoGeo, max_dist: f32, 
         .and(&oco2.timestamp)
         .into_par_iter();
 
-    if show_progress {
-        matchups.par_extend(
-            par_it
-            .progress_count(n_oco2 as u64)
-            .filter_map(|tup| { 
-                parallel_helper(tup, max_dist, max_dt, oco3)
-            }
-        ));
-    } else {
-        matchups.par_extend(
-            par_it
-            .filter_map(|tup| { 
-                parallel_helper(tup, max_dist, max_dt, oco3)
-            }
-        ));
+
+    let pbsty = indicatif::ProgressStyle::with_template(
+        "{msg} {bar} {human_pos}/{human_len}"
+    ).unwrap();
+    let pb = indicatif::ProgressBar::new(n_oco2 as u64);
+    pb.set_style(pbsty);
+    let sid0 = oco2.sounding_id
+        .first()
+        .and_then(|v| Some(*v))
+        .unwrap_or(19930101);
+    pb.set_message(format!("Matching {} OCO-2 soundings", utils::sid_to_date(sid0).unwrap_or_default()));
+    
+
+    match show_progress {
+        ShowProgress::Yes =>  {
+            matchups.par_extend(
+                par_it
+                .progress_with(pb)
+                .filter_map(|tup| { 
+                    parallel_helper(tup, max_dist, max_dt, oco3)
+                }
+            ));
+        },
+        ShowProgress::No => {
+            matchups.par_extend(
+                par_it
+                .filter_map(|tup| { 
+                    parallel_helper(tup, max_dist, max_dt, oco3)
+                }
+            ));
+        },
+        ShowProgress::Multi(mbar) => {
+            let pb = Arc::new(Mutex::from(mbar.add(pb)));
+            matchups.par_extend(
+                par_it
+                .filter_map(|tup| { 
+                    let res = parallel_helper(tup, max_dist, max_dt, oco3);
+                    if let Ok(pb) = pb.lock() {
+                        pb.inc(1);
+                    }
+                    res
+                }
+            ));
+            
+            if let Ok(pb) = pb.lock() {
+                pb.finish_and_clear();
+            };
+        },
     }
 
     println!("Number of matchups = {}", matchups.len());
@@ -728,15 +763,15 @@ fn make_one_oco_match_vec(file_idx_oco2: u8,
     oco3_matches
 }
 
-fn setup_progress_bar(n_match: u64, action: &str) -> ProgressBar {
-    let style = ProgressStyle::with_template(
-        &format!("{{bar}} {{human_pos}}/{{human_len}} {action}")
-    ).unwrap();
+// fn setup_progress_bar(n_match: u64, action: &str) -> ProgressBar {
+//     let style = ProgressStyle::with_template(
+//         &format!("{{bar}} {{human_pos}}/{{human_len}} {action}")
+//     ).unwrap();
 
-    let pb = ProgressBar::new(n_match);
-    pb.set_style(style);
-    pb
-}
+//     let pb = ProgressBar::new(n_match);
+//     pb.set_style(style);
+//     pb
+// }
 
 pub fn identify_groups_from_matched_soundings(matched_soundings: OcoMatches) -> OcoMatchGroups {
     fn update_sounding_inds(
@@ -765,9 +800,9 @@ pub fn identify_groups_from_matched_soundings(matched_soundings: OcoMatches) -> 
     // groups before the middle soundings were handled. Now I have it set up so that when we create
     // the OcoMatches instance with `from_matches` that enforces ordering by OCO-2 sounding ID.
 
-    let pb = setup_progress_bar(matched_soundings.matches.len() as u64, "match vectors grouped");
+    // let pb = setup_progress_bar(matched_soundings.matches.len() as u64, "match vectors grouped");
     for m in matched_soundings.matches {
-        pb.inc(1);
+        // pb.inc(1);
         let oco3_row = &m.oco3_sounding_ids;
         let mut matched = false;
         for (oco2_idx_set, oco3_idx_set) in match_sets.iter_mut() {
@@ -787,7 +822,7 @@ pub fn identify_groups_from_matched_soundings(matched_soundings: OcoMatches) -> 
 
         update_sounding_inds(&m, &mut oco2_sounding_indices, &mut oco3_sounding_indices, &mut mean_dists, &mut mean_time_diffs);
     }
-    pb.finish_with_message("  -> All matches grouped.");
+    // pb.finish_with_message("  -> All matches grouped.");
 
     OcoMatchGroups { oco2_lite_files: matched_soundings.oco2_files.clone(),
                      oco3_lite_files: matched_soundings.oco3_files.clone(),

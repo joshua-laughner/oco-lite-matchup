@@ -1,5 +1,6 @@
 use std::{path::{PathBuf, Path}, io::Read, ops::{Add, AddAssign}};
 
+use chrono::NaiveDate;
 use ndarray::{Array1, ArrayView1, Ix1};
 
 use crate::error::MatchupError;
@@ -208,4 +209,25 @@ impl<F: num_traits::Float + num_traits::NumAssign> AddAssign for RunningMean<F> 
         self.val += rhs.val;
         self.weight += rhs.weight;
     }
+}
+
+#[derive(Debug, Clone)]
+pub enum ShowProgress {
+    Yes,
+    No,
+    Multi(std::sync::Arc<indicatif::MultiProgress>)
+}
+
+impl ShowProgress {
+    pub fn println<I: AsRef<str>>(&self, msg: I) {
+        match self {
+            ShowProgress::Multi(mbar) => { let _ = mbar.println(msg); },
+            _ => println!("{}", msg.as_ref())
+        };
+    }
+}
+
+pub fn sid_to_date(sid: u64) -> Option<NaiveDate> {
+    let sid = format!("{}", sid);
+    NaiveDate::parse_from_str(&sid[..8], "%Y%m%d").ok()
 }

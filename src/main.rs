@@ -1,10 +1,12 @@
 use std::io::Read;
 use std::path::Path;
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use oco_lite_matchup::error::{self, MatchupError};
 use oco_lite_matchup::config::{RunOneArgs, RunMultiArgs, RunMultiConfig};
 use oco_lite_matchup::oco::{self, OcoGeo};
+use oco_lite_matchup::utils::ShowProgress;
 use rayon::prelude::*;
 use serde::Serialize;
 
@@ -30,7 +32,7 @@ fn main() -> Result<(), error::MatchupError> {
                 subargs.flag0_only, 
                 subargs.save_full_matches_as.as_deref(), 
                 subargs.read_full_matches.as_deref(),
-                true
+                ShowProgress::Yes
             )
         },
 
@@ -52,10 +54,10 @@ fn driver_one_oco2_file<P: AsRef<Path>>(
     flag0_only: bool,
     save_full_matches_as: Option<&Path>,
     read_full_matches: Option<&Path>,
-    show_progress: bool
+    show_progress: ShowProgress
 ) -> Result<(), MatchupError> {
     let matched_soundings = if let Some(full_matches_in) = read_full_matches {
-        println!("Reading previous matched soundings from {}", full_matches_in.display());
+        show_progress.println(format!("Reading previous matched soundings from {}", full_matches_in.display()));
         let ds = netcdf::open(full_matches_in)
             .map_err(|e| MatchupError::from_nc_error(e, full_matches_in.to_owned()))?;
         let grp = ds.group("matches")
@@ -63,24 +65,28 @@ fn driver_one_oco2_file<P: AsRef<Path>>(
             .ok_or_else(|| MatchupError::NetcdfMissingGroup { file: Some(full_matches_in.to_owned()), grpname: "matches".to_owned() })?;
         oco::OcoMatches::from_nc_group(&grp)?
     } else {
-        println!("Looking for matches between OCO-2 and -3");
-        let full_matches = find_matches(oco2_lite_file, oco3_lite_files, flag0_only, show_progress)?;
+        show_progress.println("Looking for matches between OCO-2 and -3");
+        let full_matches = find_matches(oco2_lite_file, oco3_lite_files, flag0_only, show_progress.clone())?;
         if let Some(full_match_file) = save_full_matches_as {
-            println!("Saving full match netCDF file: {}", full_match_file.display());
+            show_progress.println(format!("Saving full match netCDF file: {}", full_match_file.display()));
             full_matches.save_netcdf(&full_match_file)?;
         }
         full_matches.matches
     };
 
-    println!("Grouping OCO-2 and -3 matches");
+    show_progress.println("Grouping OCO-2 and -3 matches");
     matches_to_groups(matched_soundings, output_file)?;
-    println!("Done");
+    show_progress.println("Done grouping");
     Ok(())
 }
 
 fn driver_multi_oco2_file(matchups: &[RunOneArgs]) -> Result<(), MatchupError> {
+    let mbar = Arc::new(indicatif::MultiProgress::new());
+    
     let errs: Vec<MatchupError> = matchups.par_iter()
         .filter_map(|m| {
+            let mbar = Arc::clone(&mbar);
+
             let res = driver_one_oco2_file(
                 &m.oco2_lite_file, 
                 &m.oco3_lite_files, 
@@ -88,7 +94,7 @@ fn driver_multi_oco2_file(matchups: &[RunOneArgs]) -> Result<(), MatchupError> {
                 m.flag0_only, 
                 m.save_full_matches_as.as_deref(),
                 m.read_full_matches.as_deref(),
-                false
+                ShowProgress::Multi(mbar)
             );
 
             if let Err(e) = res {
@@ -105,7 +111,7 @@ fn driver_multi_oco2_file(matchups: &[RunOneArgs]) -> Result<(), MatchupError> {
     }
 }
 
-fn find_matches<P: AsRef<Path>>(oco2_lite_file: &Path, oco3_lite_files: &[P], flag0_only: bool, show_progress: bool) -> Result<Output, MatchupError> {
+fn find_matches<P: AsRef<Path>>(oco2_lite_file: &Path, oco3_lite_files: &[P], flag0_only: bool, show_progress: ShowProgress) -> Result<Output, MatchupError> {
     let oco2_locs = oco::OcoGeo::load_lite_file(oco2_lite_file, flag0_only)?;
     let oco3_locs = oco3_lite_files.into_iter()
         .fold(Ok(OcoGeo::default()), |acc: Result<OcoGeo, MatchupError>, el| {
@@ -116,8 +122,8 @@ fn find_matches<P: AsRef<Path>>(oco2_lite_file: &Path, oco3_lite_files: &[P], fl
 
     let n_oco3_files = oco3_locs.file_index.iter().max()
         .and_then(|&n| Some(n+1)).unwrap_or(0);
-    println!("Comparing {} OCO-2 soundings to {} OCO-3 soundings across {} files", 
-             oco2_locs.num_soundings(), oco3_locs.num_soundings(), n_oco3_files);
+    show_progress.println(format!("Comparing {} OCO-2 soundings to {} OCO-3 soundings across {} files", 
+             oco2_locs.num_soundings(), oco3_locs.num_soundings(), n_oco3_files));
 
     let matches = oco::match_oco3_to_oco2_parallel(&oco2_locs, &oco3_locs, 100.0, MAX_DELTA_TIME_SECONDS, show_progress);
     Ok(Output {
