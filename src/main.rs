@@ -38,7 +38,7 @@ fn main() -> Result<(), error::MatchupError> {
 
         Commands::Multi(subargs) => {
             let mut buf = String::new();
-            let mut f = std::fs::File::open(&subargs.config_file)?;
+            let mut f = std::fs::File::open(subargs.config_file)?;
             f.read_to_string(&mut buf)?;
             let cfg: RunMultiConfig = toml::from_str(&buf)?;
             driver_multi_oco2_file(&cfg.matchups)
@@ -69,7 +69,7 @@ fn driver_one_oco2_file<P: AsRef<Path>>(
         let full_matches = find_matches(oco2_lite_file, oco3_lite_files, flag0_only, show_progress.clone())?;
         if let Some(full_match_file) = save_full_matches_as {
             show_progress.println(format!("Saving full match netCDF file: {}", full_match_file.display()));
-            full_matches.save_netcdf(&full_match_file)?;
+            full_matches.save_netcdf(full_match_file)?;
         }
         full_matches.matches
     };
@@ -113,7 +113,7 @@ fn driver_multi_oco2_file(matchups: &[RunOneArgs]) -> Result<(), MatchupError> {
 
 fn find_matches<P: AsRef<Path>>(oco2_lite_file: &Path, oco3_lite_files: &[P], flag0_only: bool, show_progress: ShowProgress) -> Result<Output, MatchupError> {
     let oco2_locs = oco::OcoGeo::load_lite_file(oco2_lite_file, flag0_only)?;
-    let oco3_locs = oco3_lite_files.into_iter()
+    let oco3_locs = oco3_lite_files.iter()
         .fold(Ok(OcoGeo::default()), |acc: Result<OcoGeo, MatchupError>, el| {
             let acc = acc?;
             let next_locs = oco::OcoGeo::load_lite_file(el.as_ref(), flag0_only)?;
@@ -121,7 +121,7 @@ fn find_matches<P: AsRef<Path>>(oco2_lite_file: &Path, oco3_lite_files: &[P], fl
         })?;
 
     let n_oco3_files = oco3_locs.file_index.iter().max()
-        .and_then(|&n| Some(n+1)).unwrap_or(0);
+        .map(|&n| n+1).unwrap_or(0);
     show_progress.println(format!("Comparing {} OCO-2 soundings to {} OCO-3 soundings across {} files", 
              oco2_locs.num_soundings(), oco3_locs.num_soundings(), n_oco3_files));
 

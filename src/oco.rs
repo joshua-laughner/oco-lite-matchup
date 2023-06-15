@@ -14,9 +14,9 @@ use serde::Serialize;
 use crate::error::MatchupError;
 use crate::utils::{load_nc_var, write_nc_var, filter_by_quality, great_circle_distance, self, RunningMean, ShowProgress};
 
-const SOUNDING_ID_UNITS: &'static str = "YYYYMMDDhhmmssmf";
-const SOUNDING_ID_DESCR_OCO2: &'static str = "OCO-2 sounding ID";
-const SOUNDING_ID_DESCR_OCO3: &'static str = "OCO-3 sounding ID";
+const SOUNDING_ID_UNITS: &str = "YYYYMMDDhhmmssmf";
+const SOUNDING_ID_DESCR_OCO2: &str = "OCO-2 sounding ID";
+const SOUNDING_ID_DESCR_OCO3: &str = "OCO-3 sounding ID";
 
 #[derive(Debug, Serialize, Default)]
 pub struct OcoGeo {
@@ -209,11 +209,11 @@ impl OcoMatches {
 
         let oco2_files = load_string_var(grp, "oco2_file")?
             .iter()
-            .map(|s| PathBuf::from(s))
+            .map(PathBuf::from)
             .collect_vec();
         let oco3_files = load_string_var(grp, "oco3_file")?
             .iter()
-            .map(|s| PathBuf::from(s))
+            .map(PathBuf::from)
             .collect_vec();
         let oco2_file_indices = load_1d_var::<u8>(grp, Self::oco2_fileindex_varname())?;
         let oco2_sounding_indices = load_1d_var::<u64>(grp, Self::oco2_index_varname())?;
@@ -637,7 +637,7 @@ pub fn match_oco3_to_oco2_parallel(oco2: &OcoGeo, oco3: &OcoGeo, max_dist: f32, 
     pb.set_style(pbsty);
     let sid0 = oco2.sounding_id
         .first()
-        .and_then(|v| Some(*v))
+        .copied()
         .unwrap_or(19930101);
     pb.set_message(format!("Matching {} OCO-2 soundings", utils::sid_to_date(sid0).unwrap_or_default()));
     
@@ -686,7 +686,7 @@ pub fn match_oco3_to_oco2_parallel(oco2: &OcoGeo, oco3: &OcoGeo, max_dist: f32, 
 
 fn parallel_helper(tup: (&usize, &u8, &u64, &f32, &f32, &f64), max_dist: f32, max_dt: f64, oco3: &OcoGeo) -> Option<Match2to3> {
     let (&i_oco2, &fi_oco2, &sid_oco2, &lon_oco2, &lat_oco2, &ts_oco2) = tup;
-    let this_result = make_one_oco_match_vec(fi_oco2, i_oco2, sid_oco2, lon_oco2, lat_oco2, ts_oco2,&oco3, max_dist, max_dt);
+    let this_result = make_one_oco_match_vec(fi_oco2, i_oco2, sid_oco2, lon_oco2, lat_oco2, ts_oco2, oco3, max_dist, max_dt);
     if this_result.is_empty() {
         None
     }else{
@@ -816,7 +816,7 @@ pub fn identify_groups_from_matched_soundings(matched_soundings: OcoMatches) -> 
 
         if !matched {
             match_sets.push((
-                HashSet::from([m.oco2_sounding_id]), HashSet::from_iter(oco3_row.iter().map(|&i| i))
+                HashSet::from([m.oco2_sounding_id]), HashSet::from_iter(oco3_row.iter().copied())
             ));
         }
 
@@ -824,8 +824,8 @@ pub fn identify_groups_from_matched_soundings(matched_soundings: OcoMatches) -> 
     }
     // pb.finish_with_message("  -> All matches grouped.");
 
-    OcoMatchGroups { oco2_lite_files: matched_soundings.oco2_files.clone(),
-                     oco3_lite_files: matched_soundings.oco3_files.clone(),
+    OcoMatchGroups { oco2_lite_files: matched_soundings.oco2_files,
+                     oco3_lite_files: matched_soundings.oco3_files,
                      match_sets,
                      oco2_sounding_indices,
                      oco3_sounding_indices,

@@ -196,6 +196,12 @@ impl<F: num_traits::Float + num_traits::NumAssign> RunningMean<F> {
     }
 }
 
+impl <F: num_traits::Float + num_traits::NumAssign> Default for RunningMean<F> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<F: num_traits::Float + num_traits::NumAssign> Add for RunningMean<F> {
     type Output = Self;
 
