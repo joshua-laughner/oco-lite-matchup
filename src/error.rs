@@ -1,28 +1,69 @@
 use std::{path::PathBuf, fmt::Display};
 
+/// The general error type used by this crate.
+/// 
+/// Several error variants can contain an optional path to a file related to the
+/// error (i.e. a file being read or written to). If the path cannot be stored in
+/// the error at the time of the error, this will be `None.
 #[derive(Debug, thiserror::Error)]
 pub enum MatchupError {
+    /// A general error from reading or writing to a netCDF file. It contains
+    /// the original netcdf crate error.
     NetcdfError{nc_error: netcdf::error::Error, file: Option<PathBuf>},
+
+    /// An error to use if a group expected to exist in the netCDF file was missing.
     NetcdfMissingGroup{file: Option<PathBuf>, grpname: String},
+
+    /// An error to use if a variable expected to exist in the netCDF file was missing.
     NetcdfMissingVar{file: Option<PathBuf>, varname: String},
+
+    /// An error to use if trying to read an attribute from a netCDF file but it is of
+    /// the wrong type (i.e. expected string and got a number)
     NetcdfWrongAttrType{file: Option<PathBuf>, varname: String, attname: String, expected: &'static str},
+
+    /// An error to use if trying to read a variable from a netCDF file as an array with
+    /// a specific number of dimensions, but it has the wrong number of dimensions.
     NetcdfShapeError{file: Option<PathBuf>, varname: String, nd_error: ndarray::ShapeError},
+
+    /// An error variant wrapping an IO error for non-netCDF read/write errors.
     IOError(std::io::Error),
+
+    /// An error variant indicating a problem parsing a configuration file.
     ConfigError(toml::de::Error),
+
+    /// An error variant indicating a problem creating a configuration file.
     ConfigWriteError(toml::ser::Error),
+
+    /// An error variant to use when an assumption about how different parts of this
+    /// program work together is broken.
     InternalError(String),
+
+    /// An error variant representing multiple instances of this error type, e.g. if
+    /// running functions in parallel and >1 return different errors.
     MultipleErrors(Vec<Self>)
 }
 
 impl MatchupError {
+    /// Create a` NetcdfError` variant from a [`netcdf::error::Error`] and a path to the
+    /// netCDF file being read/written to.
+    /// 
+    /// Use this when you want to attach a netCDF file path to the error, otherwise you
+    /// should use `?` or `.into()` on the netCDF error to create the [`MatchupError`]
     pub fn from_nc_error(nc_error: netcdf::error::Error, file: PathBuf) -> Self {
         Self::NetcdfError { nc_error, file: Some(file) }
     }
 
+    /// Create a `NetcdfShapeError` varian from a [`ndarray::ShapeError`], a path to the
+    /// netCDF file being read from, and the variable name being read. If you do not/can not
+    /// want to include the path and variable, you can use the `?` shortcut.
     pub fn from_shape_error(nd_error: ndarray::ShapeError, file: PathBuf, varname: String) -> Self {
         Self::NetcdfShapeError { file: Some(file), varname, nd_error }
     }
 
+    /// For variants that include a path to a file, set that path to `p`.
+    /// 
+    /// Useful when the error is raised at a lower level that does not know the file path and you
+    /// want to attach the file path to the error from higher up in the call stack.
     pub fn set_file(self, p: PathBuf) -> Self {
         match self {
             MatchupError::NetcdfError { nc_error, file: _ } => Self::NetcdfError { nc_error, file: Some(p) },
