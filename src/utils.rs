@@ -193,6 +193,15 @@ impl<F: num_traits::Float + num_traits::NumAssign> RunningMean<F> {
 
     pub fn mean(&self) -> F {
         self.val / self.weight
+    /// Return the current mean of the values.
+    /// 
+    /// If the total weight is 0 (i.e. no values had been added), returns a `None`.
+    pub fn mean(&self) -> Option<F> {
+        if self.weight.is_zero() {
+            None
+        }else{
+            Some(self.val / self.weight)
+        }
     }
 }
 

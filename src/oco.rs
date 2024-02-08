@@ -431,7 +431,7 @@ impl OcoMatchGroups {
                         .ok_or_else(|| MatchupError::InternalError(format!("OCO-2 sounding ID {k} not stored in the distance hash map")))?;
                     acc += *dx;
                     Ok::<RunningMean<f32>, MatchupError>(acc)
-                })?.mean();
+                })?.mean().unwrap_or(f32::NAN);
 
             let group_mean_dt = oco2_inds.iter()
                 .try_fold(RunningMean::new(), |mut acc, k| {
@@ -439,7 +439,7 @@ impl OcoMatchGroups {
                         .ok_or_else(|| MatchupError::InternalError(format!("OCO-2 sounding ID {k} not stored in the time difference hash map")))?;
                     acc += *dx;
                     Ok::<RunningMean<f32>, MatchupError>(acc)
-                })?.mean();
+                })?.mean().unwrap_or(f32::NAN);
 
             // Get the corresponding file and sounding indices
             let &(oco2_fid_min, oco2_idx_min) = self.oco2_sounding_indices.get(&oco2_sid_min)
@@ -638,7 +638,7 @@ pub fn match_oco3_to_oco2_parallel(oco2: &OcoGeo, oco3: &OcoGeo, max_dist: f32, 
     let sid0 = oco2.sounding_id
         .first()
         .copied()
-        .unwrap_or(19930101);
+        .unwrap_or(19930101); // use the TAI93 epoch as the default value
     pb.set_message(format!("Matching {} OCO-2 soundings", utils::sid_to_date(sid0).unwrap_or_default()));
     
 
