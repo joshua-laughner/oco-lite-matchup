@@ -23,6 +23,7 @@ pub struct OcoGeo {
     pub lite_files: Vec<PathBuf>,
     pub file_index: Array1<u8>,
     pub sounding_id: Array1<u64>,
+    pub sounding_index: Array1<usize>,
     pub timestamp: Array1<f64>,
     pub longitude: Array1<f32>,
     pub latitude: Array1<f32>,
@@ -40,14 +41,15 @@ impl OcoGeo {
         let latitude = load_nc_var(&ds, "latitude")?;
         let quality = load_nc_var(&ds, "xco2_quality_flag")?;
         let file_index = Array1::zeros(timestamp.len());
+        let sounding_index = Array1::from_iter(0..timestamp.len());
 
         if flag0_only {
             let longitude = filter_by_quality(longitude.view(), quality.view());
             let latitude = filter_by_quality(latitude.view(), quality.view());
             let quality = filter_by_quality(quality.view(), quality.view());
-            Ok(OcoGeo { lite_files: vec![lite_file.to_owned()], file_index, sounding_id, timestamp, longitude, latitude, quality })
+            Ok(OcoGeo { lite_files: vec![lite_file.to_owned()], file_index, sounding_id, sounding_index, timestamp, longitude, latitude, quality })
         }else{
-            Ok(OcoGeo { lite_files: vec![lite_file.to_owned()], file_index, sounding_id, timestamp, longitude, latitude, quality })
+            Ok(OcoGeo { lite_files: vec![lite_file.to_owned()], file_index, sounding_id, sounding_index, timestamp, longitude, latitude, quality })
         }
 
     }
@@ -90,6 +92,7 @@ impl OcoGeo {
         self.lite_files.extend(other.lite_files);
         self.file_index = concatenate![Axis(0), self.file_index, other.file_index + curr_n_files];
         self.sounding_id = concatenate![Axis(0), self.sounding_id, other.sounding_id];
+        self.sounding_index = concatenate![Axis(0), self.sounding_index, other.sounding_index];
         self.timestamp = concatenate![Axis(0), self.timestamp, other.timestamp];
         self.longitude = concatenate![Axis(0), self.longitude, other.longitude];
         self.latitude = concatenate![Axis(0), self.latitude, other.latitude];
@@ -758,18 +761,19 @@ fn make_one_oco_match_vec(file_idx_oco2: u8,
     -> Match2to3 {
     let mut oco3_matches = Match2to3::new(file_idx_oco2, idx_oco2 as u64, sid_oco2);
 
-    let it = izip!(oco3.file_index.iter(),
-                                                     oco3.sounding_id.iter(),
-                                                     oco3.longitude.iter(),
-                                                     oco3.latitude.iter(),
-                                                     oco3.timestamp.iter()).enumerate();
+    let it = izip!(
+        oco3.sounding_index.iter(),
+        oco3.file_index.iter(),
+        oco3.sounding_id.iter(),
+        oco3.longitude.iter(),
+        oco3.latitude.iter(),
+        oco3.timestamp.iter()
+    );
 
-    for (idx_oco3, (&file_idx_oco3, &sid_oco3, &lon_oco3, &lat_oco3, &ts_oco3)) in it {
+    for (&idx_oco3, &file_idx_oco3, &sid_oco3, &lon_oco3, &lat_oco3, &ts_oco3) in it {
         let this_dist = great_circle_distance(lon_oco2, lat_oco2, lon_oco3, lat_oco3);
         let this_delta_time = ts_oco2 - ts_oco3;
 
-        // TODO: because we're iterating over all the OCO-3 locations, the index is not correct within
-        // each file.
         if this_dist <= max_dist && this_delta_time.abs() >= min_dt && this_delta_time.abs() < max_dt {
             oco3_matches.add_oco3_match(file_idx_oco3, idx_oco3, sid_oco3, this_dist, this_delta_time as f32);
         }
