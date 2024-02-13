@@ -411,24 +411,26 @@ pub struct OcoMatchGroups {
 }
 
 impl OcoMatchGroups {
-    pub fn to_nc_group(&self, ds: &mut netcdf::MutableFile, group_name: Option<&str>) -> Result<(), MatchupError> {
-        let out_file = utils::nc_file(ds);
-        let mut grp = self.setup_nc_group(ds, group_name)?;
+    pub fn to_nc_group(&self, ds: &mut netcdf::MutableFile, group_name: Option<&str>, is_oco3_self_crossing: bool) -> Result<(), MatchupError> {
+        let (instr_a, instr_b) = Self::instr_names(is_oco3_self_crossing);
 
-        self.write_file_variables(&mut grp)?;
+        let out_file = utils::nc_file(ds);
+        let mut grp = self.setup_nc_group(ds, group_name, is_oco3_self_crossing)?;
+
+        self.write_file_variables(&mut grp, is_oco3_self_crossing)?;
 
         for (i, (oco2_inds, oco3_inds)) in self.match_sets.iter().enumerate() {
             // Calculate the first and last sounding ID for each group
-            let oco2_sid_min = *oco2_inds.iter().min().expect("Expected at least one OCO-2 index in every hash set");
-            let oco2_sid_max = *oco2_inds.iter().max().expect("Expected at least one OCO-2 index in every hash set");
-            let oco3_sid_min = *oco3_inds.iter().min().expect("Expected at least one OCO-3 index in every hash set");
-            let oco3_sid_max = *oco3_inds.iter().max().expect("Expected at least one OCO-3 index in every hash set");
+            let oco2_sid_min = *oco2_inds.iter().min().expect("Expected at least one first instrument index in every hash set");
+            let oco2_sid_max = *oco2_inds.iter().max().expect("Expected at least one first instrument index in every hash set");
+            let oco3_sid_min = *oco3_inds.iter().min().expect("Expected at least one second instrument index in every hash set");
+            let oco3_sid_max = *oco3_inds.iter().max().expect("Expected at least one second instrument index in every hash set");
 
             // Calculate the mean distance and time difference between OCO-2 and -3
             let group_mean_dist = oco2_inds.iter()
                 .try_fold(RunningMean::new(), |mut acc, k| {
                     let dx = self.distances.get(k)
-                        .ok_or_else(|| MatchupError::InternalError(format!("OCO-2 sounding ID {k} not stored in the distance hash map")))?;
+                        .ok_or_else(|| MatchupError::InternalError(format!("First instrument sounding ID {k} not stored in the distance hash map")))?;
                     acc += *dx;
                     Ok::<RunningMean<f32>, MatchupError>(acc)
                 })?.mean().unwrap_or(f32::NAN);
@@ -436,58 +438,58 @@ impl OcoMatchGroups {
             let group_mean_dt = oco2_inds.iter()
                 .try_fold(RunningMean::new(), |mut acc, k| {
                     let dx = self.time_diffs.get(k)
-                        .ok_or_else(|| MatchupError::InternalError(format!("OCO-2 sounding ID {k} not stored in the time difference hash map")))?;
+                        .ok_or_else(|| MatchupError::InternalError(format!("First instrument sounding ID {k} not stored in the time difference hash map")))?;
                     acc += *dx;
                     Ok::<RunningMean<f32>, MatchupError>(acc)
                 })?.mean().unwrap_or(f32::NAN);
 
             // Get the corresponding file and sounding indices
             let &(oco2_fid_min, oco2_idx_min) = self.oco2_sounding_indices.get(&oco2_sid_min)
-                .ok_or_else(|| MatchupError::InternalError(format!("OCO-2 sounding ID {oco2_sid_min} not stored in the index hashmap")))?;
+                .ok_or_else(|| MatchupError::InternalError(format!("First instrument sounding ID {oco2_sid_min} not stored in the index hashmap")))?;
             let &(oco2_fid_max, oco2_idx_max) = self.oco2_sounding_indices.get(&oco2_sid_max)
-                .ok_or_else(|| MatchupError::InternalError(format!("OCO-2 sounding ID {oco2_sid_max} not stored in the index hashmap")))?;
+                .ok_or_else(|| MatchupError::InternalError(format!("First instrument sounding ID {oco2_sid_max} not stored in the index hashmap")))?;
             let &(oco3_fid_min, oco3_idx_min) = self.oco3_sounding_indices.get(&oco3_sid_min)
-                .ok_or_else(|| MatchupError::InternalError(format!("OCO-3 sounding ID {oco3_sid_min} not stored in the index hashmap")))?;
+                .ok_or_else(|| MatchupError::InternalError(format!("Second instrument sounding ID {oco3_sid_min} not stored in the index hashmap")))?;
             let &(oco3_fid_max, oco3_idx_max) = self.oco3_sounding_indices.get(&oco3_sid_max)
-                .ok_or_else(|| MatchupError::InternalError(format!("OCO-3 sounding ID {oco3_sid_max} not stored in the index hashmap")))?;
+                .ok_or_else(|| MatchupError::InternalError(format!("Second instrument sounding ID {oco3_sid_max} not stored in the index hashmap")))?;
 
             let scalar_extents: Extents = [i].into();
             let extents: Extents = [i..i+1, 0..2].into();
 
             // Writing OCO-2 variables
             {
-                grp.variable_mut(&Self::sounding_id_varname(2)).expect("OCO-2 sounding ID variable must be initialized first")
+                grp.variable_mut(&Self::sounding_id_varname(instr_a)).expect("First instrument sounding ID variable must be initialized first")
                 .put_values(&[oco2_sid_min, oco2_sid_max], &extents)
                 .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
             }
             
             {
-                grp.variable_mut(&Self::sounding_index_varname(2)).expect("OCO-2 sounding index variable must be initialized first")
+                grp.variable_mut(&Self::sounding_index_varname(instr_a)).expect("First instrument sounding index variable must be initialized first")
                 .put_values(&[oco2_idx_min, oco2_idx_max], &extents)
                 .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
             }
 
             {
-                grp.variable_mut(&Self::file_index_varname(2)).expect("OCO-2 file index variable must be initialized first")
+                grp.variable_mut(&Self::file_index_varname(instr_a)).expect("First instrument file index variable must be initialized first")
                 .put_values(&[oco2_fid_min, oco2_fid_max], &extents)
                 .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
             }
 
             // Writing OCO-3 variables
             {
-                grp.variable_mut(&Self::sounding_id_varname(3)).expect("OCO-3 sounding ID variable must be initialized first")
+                grp.variable_mut(&Self::sounding_id_varname(instr_b)).expect("Second instrument sounding ID variable must be initialized first")
                 .put_values(&[oco3_sid_min, oco3_sid_max], &extents)
                 .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
             }
             
             {
-                grp.variable_mut(&Self::sounding_index_varname(3)).expect("OCO-3 sounding index variable must be initialized first")
+                grp.variable_mut(&Self::sounding_index_varname(instr_b)).expect("Second instrument sounding index variable must be initialized first")
                 .put_values(&[oco3_idx_min, oco3_idx_max], &extents)
                 .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
             }
 
             {
-                grp.variable_mut(&Self::file_index_varname(3)).expect("OCO-3 file index variable must be initialized first")
+                grp.variable_mut(&Self::file_index_varname(instr_b)).expect("Second instrument file index variable must be initialized first")
                 .put_values(&[oco3_fid_min, oco3_fid_max], &extents)
                 .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
             }
@@ -510,6 +512,12 @@ impl OcoMatchGroups {
         Ok(())
     }
 
+    fn instr_names(is_oco3_self_crossing: bool) -> (&'static str, &'static str) {
+        let instr_a = if is_oco3_self_crossing { "3a" } else { "2" };
+        let instr_b = if is_oco3_self_crossing { "3b" } else { "2" };
+        (instr_a, instr_b)
+    }
+
     fn match_group_dim() -> &'static str {
         "match_group"
     }
@@ -518,36 +526,37 @@ impl OcoMatchGroups {
         "start_end"
     }
 
-    fn lite_file_varname(instrument: i32) -> String {
+    fn lite_file_varname(instrument: &str) -> String {
         format!("oco{instrument}_lite_file")
     }
 
-    fn lite_file_sha256_varname(instrument: i32) -> String {
+    fn lite_file_sha256_varname(instrument: &str) -> String {
         format!("oco{instrument}_lite_file_sha256")
     }
 
-    fn sounding_id_varname(instrument: i32) -> String {
+    fn sounding_id_varname(instrument: &str) -> String {
         format!("oco{instrument}_sounding_id")
     }
 
-    fn sounding_index_varname(instrument: i32) -> String {
+    fn sounding_index_varname(instrument: &str) -> String {
         format!("oco{instrument}_sounding_index")
     }
 
-    fn file_index_varname(instrument: i32) -> String {
+    fn file_index_varname(instrument: &str) -> String {
         format!("oco{instrument}_file_index")
     }
 
     fn distance_varname() -> &'static str {
-        "mean_oco2_oco3_distance"
+        "mean_inter_orbit_distance"
     }
 
     fn time_diff_varname() -> &'static str {
-        "mean_oco2_oco3_time_difference"
+        "mean_inter_orbit_time_difference"
     }
 
-    fn setup_nc_group<'f>(&'f self, ds: &'f mut netcdf::MutableFile, group_name: Option<&str>) -> Result<netcdf::GroupMut, MatchupError> {
-        
+    fn setup_nc_group<'f>(&'f self, ds: &'f mut netcdf::MutableFile, group_name: Option<&str>, is_oco3_self_crossing: bool) -> Result<netcdf::GroupMut, MatchupError> {
+        let (instr_a, instr_b) = Self::instr_names(is_oco3_self_crossing);
+
         // Make the group and variables
         let out_file = utils::nc_file(ds);
         let mut grp = if let Some(group_name) = group_name {
@@ -566,13 +575,14 @@ impl OcoMatchGroups {
         let dims1 = vec![Self::match_group_dim()];
         let dims2 = vec![Self::match_group_dim(), Self::start_end_dim()];
 
+        // TODO: update variable descriptions to instruct 2/3 or 3a/3b
         let var_info = [
-            (Self::sounding_id_varname(2), &dims2, false, Some(SOUNDING_ID_UNITS), Some(SOUNDING_ID_DESCR_OCO2)),
-            (Self::file_index_varname(2), &dims2, false, None, Some("0-based index for the OCO-2 lite file name variable")),
-            (Self::sounding_index_varname(2), &dims2, false, None, Some("0-based index for the sounding in the OCO-2 lite file")),
-            (Self::sounding_id_varname(3), &dims2, false, Some(SOUNDING_ID_UNITS), Some(SOUNDING_ID_DESCR_OCO3)),
-            (Self::file_index_varname(3), &dims2, false, None, Some("0-based index for the OCO-3 lite file name variable")),
-            (Self::sounding_index_varname(3), &dims2, false, None, Some("0-based index for the sounding in the OCO-3 lite file")),
+            (Self::sounding_id_varname(instr_a), &dims2, false, Some(SOUNDING_ID_UNITS), Some(SOUNDING_ID_DESCR_OCO2)),
+            (Self::file_index_varname(instr_a), &dims2, false, None, Some("0-based index for the OCO-2 lite file name variable")),
+            (Self::sounding_index_varname(instr_a), &dims2, false, None, Some("0-based index for the sounding in the OCO-2 lite file")),
+            (Self::sounding_id_varname(instr_b), &dims2, false, Some(SOUNDING_ID_UNITS), Some(SOUNDING_ID_DESCR_OCO3)),
+            (Self::file_index_varname(instr_b), &dims2, false, None, Some("0-based index for the OCO-3 lite file name variable")),
+            (Self::sounding_index_varname(instr_b), &dims2, false, None, Some("0-based index for the sounding in the OCO-3 lite file")),
             (Self::distance_varname().to_owned(), &dims1, true, Some("km"), Some("Mean distance between the matched OCO-2 and -3 soundings. Note that this is only calculated for soundings meeting the coincidence criteria, which may not be all soundings in the group.")),
             (Self::time_diff_varname().to_owned(), &dims1, true, Some("s"), Some("Mean time difference (in seconds) between the matched OCO-2 and -3 soundings. Note that this is only calculated for soundings meeting the coincidence criteria, which may not be all soundings in the group.")),
         ];
@@ -600,22 +610,24 @@ impl OcoMatchGroups {
         Ok(grp)
     }
 
-    fn write_file_variables(&self, grp: &mut netcdf::GroupMut) -> Result<(), MatchupError> { 
+    fn write_file_variables(&self, grp: &mut netcdf::GroupMut, is_oco3_self_crossing: bool) -> Result<(), MatchupError> { 
+        let (instr_a, instr_b) = Self::instr_names(is_oco3_self_crossing);
+
         let oco2_lite_files = self.oco2_lite_files.iter().map(|p| p.display().to_string()).collect_vec();
         let oco2_file_sha256 = self.oco2_lite_files.iter().map(|p| utils::file_sha256(p)).collect::<Result<Vec<String>,_>>()?;
         let oco3_lite_files = self.oco3_lite_files.iter().map(|p| p.display().to_string()).collect_vec();
         let oco3_file_sha256 = self.oco3_lite_files.iter().map(|p| utils::file_sha256(p)).collect::<Result<Vec<String>,_>>()?;
 
-        utils::write_string_nc_var(grp, &oco2_lite_files, &Self::lite_file_varname(2), "oco2_lite_file", None, Some("Paths to OCO-2 lite files"))?;
-        utils::write_string_nc_var(grp, &oco2_file_sha256, &Self::lite_file_sha256_varname(2), "oco2_lite_file", None, Some("SHA-256 checksums of OCO-2 lite files"))?;
-        utils::write_string_nc_var(grp, &oco3_lite_files, &Self::lite_file_varname(3), "oco3_lite_file", None, Some("Paths to OCO-3 lite files"))?;
-        utils::write_string_nc_var(grp, &oco3_file_sha256, &Self::lite_file_sha256_varname(3), "oco3_lite_file", None, Some("SHA-256 checksums of OCO-3 lite files"))?;
+        utils::write_string_nc_var(grp, &oco2_lite_files, &Self::lite_file_varname(instr_a), "oco2_lite_file", None, Some("Paths to OCO-2 lite files"))?;
+        utils::write_string_nc_var(grp, &oco2_file_sha256, &Self::lite_file_sha256_varname(instr_a), "oco2_lite_file", None, Some("SHA-256 checksums of OCO-2 lite files"))?;
+        utils::write_string_nc_var(grp, &oco3_lite_files, &Self::lite_file_varname(instr_b), "oco3_lite_file", None, Some("Paths to OCO-3 lite files"))?;
+        utils::write_string_nc_var(grp, &oco3_file_sha256, &Self::lite_file_sha256_varname(instr_b), "oco3_lite_file", None, Some("SHA-256 checksums of OCO-3 lite files"))?;
 
         Ok(())
     }
 }
 
-pub fn match_oco3_to_oco2_parallel(oco2: &OcoGeo, oco3: &OcoGeo, max_dist: f32, max_dt: f64, show_progress: ShowProgress) -> OcoMatches {
+pub fn match_oco3_to_oco2_parallel(oco2: &OcoGeo, oco3: &OcoGeo, max_dist: f32, min_dt: f64, max_dt: f64, show_progress: ShowProgress) -> OcoMatches {
     let n_oco2 = oco2.longitude.len();
     let oco2_inds = Array1::from_iter(0..n_oco2);
     
@@ -648,7 +660,7 @@ pub fn match_oco3_to_oco2_parallel(oco2: &OcoGeo, oco3: &OcoGeo, max_dist: f32, 
                 par_it
                 .progress_with(pb)
                 .filter_map(|tup| { 
-                    parallel_helper(tup, max_dist, max_dt, oco3)
+                    parallel_helper(tup, max_dist, min_dt, max_dt, oco3)
                 }
             ));
         },
@@ -656,7 +668,7 @@ pub fn match_oco3_to_oco2_parallel(oco2: &OcoGeo, oco3: &OcoGeo, max_dist: f32, 
             matchups.par_extend(
                 par_it
                 .filter_map(|tup| { 
-                    parallel_helper(tup, max_dist, max_dt, oco3)
+                    parallel_helper(tup, max_dist, min_dt, max_dt, oco3)
                 }
             ));
         },
@@ -665,7 +677,7 @@ pub fn match_oco3_to_oco2_parallel(oco2: &OcoGeo, oco3: &OcoGeo, max_dist: f32, 
             matchups.par_extend(
                 par_it
                 .filter_map(|tup| { 
-                    let res = parallel_helper(tup, max_dist, max_dt, oco3);
+                    let res = parallel_helper(tup, max_dist, min_dt, max_dt, oco3);
                     if let Ok(pb) = pb.lock() {
                         pb.inc(1);
                     }
@@ -684,9 +696,9 @@ pub fn match_oco3_to_oco2_parallel(oco2: &OcoGeo, oco3: &OcoGeo, max_dist: f32, 
     OcoMatches::from_matches(matchups, oco2.lite_files.clone(), oco3.lite_files.clone())
 }
 
-fn parallel_helper(tup: (&usize, &u8, &u64, &f32, &f32, &f64), max_dist: f32, max_dt: f64, oco3: &OcoGeo) -> Option<Match2to3> {
+fn parallel_helper(tup: (&usize, &u8, &u64, &f32, &f32, &f64), max_dist: f32, min_dt: f64, max_dt: f64, oco3: &OcoGeo) -> Option<Match2to3> {
     let (&i_oco2, &fi_oco2, &sid_oco2, &lon_oco2, &lat_oco2, &ts_oco2) = tup;
-    let this_result = make_one_oco_match_vec(fi_oco2, i_oco2, sid_oco2, lon_oco2, lat_oco2, ts_oco2, oco3, max_dist, max_dt);
+    let this_result = make_one_oco_match_vec(fi_oco2, i_oco2, sid_oco2, lon_oco2, lat_oco2, ts_oco2, oco3, max_dist, min_dt, max_dt);
     if this_result.is_empty() {
         None
     }else{
@@ -740,7 +752,8 @@ fn make_one_oco_match_vec(file_idx_oco2: u8,
                           lat_oco2: f32, 
                           ts_oco2: f64, 
                           oco3: &OcoGeo, 
-                          max_dist: f32, 
+                          max_dist: f32,
+                          min_dt: f64, 
                           max_dt: f64) 
     -> Match2to3 {
     let mut oco3_matches = Match2to3::new(file_idx_oco2, idx_oco2 as u64, sid_oco2);
@@ -755,7 +768,9 @@ fn make_one_oco_match_vec(file_idx_oco2: u8,
         let this_dist = great_circle_distance(lon_oco2, lat_oco2, lon_oco3, lat_oco3);
         let this_delta_time = ts_oco2 - ts_oco3;
 
-        if this_dist <= max_dist && this_delta_time.abs() < max_dt {
+        // TODO: because we're iterating over all the OCO-3 locations, the index is not correct within
+        // each file.
+        if this_dist <= max_dist && this_delta_time.abs() >= min_dt && this_delta_time.abs() < max_dt {
             oco3_matches.add_oco3_match(file_idx_oco3, idx_oco3, sid_oco3, this_dist, this_delta_time as f32);
         }
     }

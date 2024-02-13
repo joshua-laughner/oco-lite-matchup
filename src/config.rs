@@ -20,6 +20,13 @@ pub struct RunOneArgs {
     #[clap(short='0', long)]
     pub flag0_only: bool,
 
+    /// Set this flag to indicate that we are looking for OCO-3 self crossings, rather than 
+    /// OCO-2/-3 crossings. This will set a minimum time between soundings nearby to be
+    /// considered a match and change the output variable names to reflect more accurately
+    /// what is being searched for.
+    #[clap(long)]
+    pub oco3_self_cross: bool,
+
     /// Give this argument with a path to save a netCDF file containing an exact map of OCO-2 to OCO-3 soundings.
     /// Note: this can be 100s of MB
     #[clap(short='f', long)]

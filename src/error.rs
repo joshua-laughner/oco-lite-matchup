@@ -7,6 +7,9 @@ use std::{path::PathBuf, fmt::Display};
 /// the error at the time of the error, this will be `None.
 #[derive(Debug, thiserror::Error)]
 pub enum MatchupError {
+    /// An error for improper user-supplied arguments.
+    ArgumentError(String),
+
     /// A general error from reading or writing to a netCDF file. It contains
     /// the original netcdf crate error.
     NetcdfError{nc_error: netcdf::error::Error, file: Option<PathBuf>},
@@ -66,6 +69,7 @@ impl MatchupError {
     /// want to attach the file path to the error from higher up in the call stack.
     pub fn set_file(self, p: PathBuf) -> Self {
         match self {
+            MatchupError::ArgumentError(_) => self,
             MatchupError::NetcdfError { nc_error, file: _ } => Self::NetcdfError { nc_error, file: Some(p) },
             MatchupError::NetcdfMissingGroup { file: _, grpname } => Self::NetcdfMissingGroup { file: Some(p), grpname },
             MatchupError::NetcdfMissingVar { file: _, varname } => Self::NetcdfMissingVar { file: Some(p), varname },
@@ -83,6 +87,9 @@ impl MatchupError {
 impl Display for MatchupError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            MatchupError::ArgumentError(msg) => {
+                write!(f, "{msg}")
+            }
             MatchupError::NetcdfError { nc_error, file } => {
                 if let Some(p) = file {
                     write!(f, "Error reading netCDF file {}: {nc_error}", p.display())

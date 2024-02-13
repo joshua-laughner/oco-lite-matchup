@@ -11,7 +11,7 @@ use rayon::prelude::*;
 use serde::Serialize;
 
 
-
+const MIN_SELF_CROSS_DELTA_TIME_SECONDS: f64 = 2_787.0; // about half an orbit
 const MAX_DELTA_TIME_SECONDS: f64 = 43_200.0; // 12 hours
 
 // TODO: Modify to accept multiple OCO-2 lite files (for different modes? not sure if needed)
@@ -29,7 +29,8 @@ fn main() -> Result<(), error::MatchupError> {
                 &subargs.oco2_lite_file, 
                 &subargs.oco3_lite_files, 
                 &subargs.output_file, 
-                subargs.flag0_only, 
+                subargs.flag0_only,
+                subargs.oco3_self_cross, 
                 subargs.save_full_matches_as.as_deref(), 
                 subargs.read_full_matches.as_deref(),
                 ShowProgress::Yes
@@ -52,10 +53,13 @@ fn driver_one_oco2_file<P: AsRef<Path>>(
     oco3_lite_files: &[P],
     output_file: &Path,
     flag0_only: bool,
+    is_oco3_self_crossing: bool,
     save_full_matches_as: Option<&Path>,
     read_full_matches: Option<&Path>,
     show_progress: ShowProgress
 ) -> Result<(), MatchupError> {
+    let min_dt = if is_oco3_self_crossing { MIN_SELF_CROSS_DELTA_TIME_SECONDS } else { -0.1 };
+
     let matched_soundings = if let Some(full_matches_in) = read_full_matches {
         show_progress.println(format!("Reading previous matched soundings from {}", full_matches_in.display()));
         let ds = netcdf::open(full_matches_in)
@@ -66,7 +70,7 @@ fn driver_one_oco2_file<P: AsRef<Path>>(
         oco::OcoMatches::from_nc_group(&grp)?
     } else {
         show_progress.println("Looking for matches between OCO-2 and -3");
-        let full_matches = find_matches(oco2_lite_file, oco3_lite_files, flag0_only, show_progress.clone())?;
+        let full_matches = find_matches(oco2_lite_file, oco3_lite_files, flag0_only, min_dt, show_progress.clone())?;
         if let Some(full_match_file) = save_full_matches_as {
             show_progress.println(format!("Saving full match netCDF file: {}", full_match_file.display()));
             full_matches.save_netcdf(full_match_file)?;
@@ -75,7 +79,7 @@ fn driver_one_oco2_file<P: AsRef<Path>>(
     };
 
     show_progress.println("Grouping OCO-2 and -3 matches");
-    matches_to_groups(matched_soundings, output_file)?;
+    matches_to_groups(matched_soundings, output_file, is_oco3_self_crossing)?;
     show_progress.println("Done grouping");
     Ok(())
 }
@@ -91,7 +95,8 @@ fn driver_multi_oco2_file(matchups: &[RunOneArgs]) -> Result<(), MatchupError> {
                 &m.oco2_lite_file, 
                 &m.oco3_lite_files, 
                 &m.output_file,
-                m.flag0_only, 
+                m.flag0_only,
+                m.oco3_self_cross,
                 m.save_full_matches_as.as_deref(),
                 m.read_full_matches.as_deref(),
                 ShowProgress::Multi(mbar)
@@ -111,7 +116,7 @@ fn driver_multi_oco2_file(matchups: &[RunOneArgs]) -> Result<(), MatchupError> {
     }
 }
 
-fn find_matches<P: AsRef<Path>>(oco2_lite_file: &Path, oco3_lite_files: &[P], flag0_only: bool, show_progress: ShowProgress) -> Result<Output, MatchupError> {
+fn find_matches<P: AsRef<Path>>(oco2_lite_file: &Path, oco3_lite_files: &[P], flag0_only: bool, min_dt: f64, show_progress: ShowProgress) -> Result<Output, MatchupError> {
     let oco2_locs = oco::OcoGeo::load_lite_file(oco2_lite_file, flag0_only)?;
     let oco3_locs = oco3_lite_files.iter()
         .fold(Ok(OcoGeo::default()), |acc: Result<OcoGeo, MatchupError>, el| {
@@ -125,7 +130,7 @@ fn find_matches<P: AsRef<Path>>(oco2_lite_file: &Path, oco3_lite_files: &[P], fl
     show_progress.println(format!("Comparing {} OCO-2 soundings to {} OCO-3 soundings across {} files", 
              oco2_locs.num_soundings(), oco3_locs.num_soundings(), n_oco3_files));
 
-    let matches = oco::match_oco3_to_oco2_parallel(&oco2_locs, &oco3_locs, 100.0, MAX_DELTA_TIME_SECONDS, show_progress);
+    let matches = oco::match_oco3_to_oco2_parallel(&oco2_locs, &oco3_locs, 100.0, min_dt, MAX_DELTA_TIME_SECONDS, show_progress);
     Ok(Output {
         oco2_locations: oco2_locs,
         oco3_locations: oco3_locs,
@@ -133,11 +138,11 @@ fn find_matches<P: AsRef<Path>>(oco2_lite_file: &Path, oco3_lite_files: &[P], fl
     })
 }
 
-fn matches_to_groups(matched_soundings: oco::OcoMatches, nc_file: &Path) -> Result<(), MatchupError> {
+fn matches_to_groups(matched_soundings: oco::OcoMatches, nc_file: &Path, is_oco3_self_crossing: bool) -> Result<(), MatchupError> {
     let groups = oco::identify_groups_from_matched_soundings(matched_soundings);
     let mut ds = netcdf::create(nc_file)
         .map_err(|e| MatchupError::from_nc_error(e, nc_file.to_owned()))?;
-    groups.to_nc_group(&mut ds, None)?;
+    groups.to_nc_group(&mut ds, None, is_oco3_self_crossing)?;
     Ok(())
 }
 
