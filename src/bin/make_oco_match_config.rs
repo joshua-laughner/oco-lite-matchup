@@ -101,8 +101,8 @@ struct MainArgs {
     /// directories under "/data" with a "lite" subdirectory for each day directory. Note that 
     /// at present, this tool only supports directory structures where there is one .nc4 file
     /// per directory. See https://docs.rs/chrono/latest/chrono/format/strftime/index.html for
-    /// the full list of chrono format specifiers. Without --oco2-self-cross, this must be
-    /// the directory structure for OCO-2 lite files. With --oco2-self-cross, this will be
+    /// the full list of chrono format specifiers. Without --oco3-self-cross, this must be
+    /// the directory structure for OCO-2 lite files. With --oco3-self-cross, this will be
     /// the OCO-3 lite file directory structure.
     #[arg(long="first-dir", value_parser = DirStructure::from_str)]
     first_dir_structure: DirStructure,
@@ -143,7 +143,7 @@ struct MainArgs {
 
     /// Use this option to indicate that we want to look for OCO-3 self crossings. This changes the match
     /// rules to avoid all points next to each other counting as a "match" and modifies the output format
-    /// to reflect what's being matched. This also eliminates the need for the OCO3_DIR_STRUCTURE 
+    /// to reflect what's being matched. This also eliminates the need for the --second-dir argument. 
     #[clap(long)]
     pub oco3_self_cross: bool
 }

@@ -6,8 +6,8 @@ edition = "2021"
 [lib]
 
 [[bin]]
-name = "make-config"
-path = "src/bin/make_config.rs"
+name = "make-oco-match-config"
+path = "src/bin/make_oco_match_config.rs"
 
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -19,10 +19,13 @@ hex = "0.4.3"
 indicatif = { version = "0.17.3", features = ["rayon"] }
 itertools = "0.10.5"
 ndarray = { version = "0.15.6", features = ["serde", "rayon"] }
-netcdf = { version = "0.8.1", features = ["static"] }
+netcdf = { version = "0.8.1" }
 num-traits = "0.2.15"
 rayon = "1.7.0"
 serde = { version = "1.0.163", features = ["derive"] }
 sha2 = "0.10.6"
 thiserror = "1.0.40"
 toml = "0.7.4"
+
+[features]
+static = ["netcdf/static"]
