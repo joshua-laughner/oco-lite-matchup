@@ -19,6 +19,9 @@ const MAX_DELTA_TIME_SECONDS: f64 = 43_200.0; // 12 hours
 // TODO: make the two progress bars (initial matchup and grouping) use multibar via
 //  progess_with (https://docs.rs/indicatif/latest/indicatif/trait.ParallelProgressIterator.html#tymethod.progress_with)
 fn main() -> Result<(), error::MatchupError> {
+    env_logger::init();
+    log::debug!("Debug logging active");
+
     let args = MainArgs::parse();
     println!("Initializing thread pool with {} threads", args.nprocs);
     rayon::ThreadPoolBuilder::new().num_threads(args.nprocs).build_global().expect("Failed to set up the thread pool");
@@ -140,8 +143,10 @@ fn find_matches<P: AsRef<Path>>(oco2_lite_file: &Path, oco3_lite_files: &[P], fl
 
 fn matches_to_groups(matched_soundings: oco::OcoMatches, nc_file: &Path, is_oco3_self_crossing: bool) -> Result<(), MatchupError> {
     let groups = oco::identify_groups_from_matched_soundings(matched_soundings);
+    log::debug!("Creating nc_file {}", nc_file.display());
     let mut ds = netcdf::create(nc_file)
         .map_err(|e| MatchupError::from_nc_error(e, nc_file.to_owned()))?;
+    log::debug!("File created successfully");
     groups.to_nc_group(&mut ds, None, is_oco3_self_crossing)?;
     Ok(())
 }

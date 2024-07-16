@@ -15,9 +15,11 @@ path = "src/bin/make_oco_match_config.rs"
 [dependencies]
 chrono = { version = "0.4.26", features = ["serde"] }
 clap = { version = "4.3.0", features = ["derive"] }
+env_logger = "0.11.3"
 hex = "0.4.3"
 indicatif = { version = "0.17.3", features = ["rayon"] }
 itertools = "0.10.5"
+log = "0.4.22"
 ndarray = { version = "0.15.6", features = ["serde", "rayon"] }
 netcdf = { version = "0.8.1" }
 num-traits = "0.2.15"

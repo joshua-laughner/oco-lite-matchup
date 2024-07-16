@@ -423,6 +423,7 @@ impl OcoMatchGroups {
         self.write_file_variables(&mut grp, is_oco3_self_crossing)?;
 
         for (i, (oco2_inds, oco3_inds)) in self.match_sets.iter().enumerate() {
+            log::debug!("Saving match set {i}");
             // Calculate the first and last sounding ID for each group
             let oco2_sid_min = *oco2_inds.iter().min().expect("Expected at least one first instrument index in every hash set");
             let oco2_sid_max = *oco2_inds.iter().max().expect("Expected at least one first instrument index in every hash set");
@@ -460,6 +461,7 @@ impl OcoMatchGroups {
             let extents: Extents = [i..i+1, 0..2].into();
 
             // Writing OCO-2 variables
+            log::debug!("(Writing OCO-2 variables)");
             {
                 grp.variable_mut(&Self::sounding_id_varname(instr_a)).expect("First instrument sounding ID variable must be initialized first")
                 .put_values(&[oco2_sid_min, oco2_sid_max], &extents)
@@ -479,6 +481,7 @@ impl OcoMatchGroups {
             }
 
             // Writing OCO-3 variables
+            log::debug!("(Writing OCO-3 variables)");
             {
                 grp.variable_mut(&Self::sounding_id_varname(instr_b)).expect("Second instrument sounding ID variable must be initialized first")
                 .put_values(&[oco3_sid_min, oco3_sid_max], &extents)
@@ -498,6 +501,7 @@ impl OcoMatchGroups {
             }
 
             // Writing distance and time variables
+            log::debug!("(Writing distance & time variables)");
             {
                 grp.variable_mut(Self::distance_varname()).expect("Distance variable must be initialized first")
                 .put_values(&[group_mean_dist], &scalar_extents)
@@ -517,7 +521,7 @@ impl OcoMatchGroups {
 
     fn instr_names(is_oco3_self_crossing: bool) -> (&'static str, &'static str) {
         let instr_a = if is_oco3_self_crossing { "3a" } else { "2" };
-        let instr_b = if is_oco3_self_crossing { "3b" } else { "2" };
+        let instr_b = if is_oco3_self_crossing { "3b" } else { "3" };
         (instr_a, instr_b)
     }
 
@@ -559,16 +563,20 @@ impl OcoMatchGroups {
 
     fn setup_nc_group<'f>(&'f self, ds: &'f mut netcdf::MutableFile, group_name: Option<&str>, is_oco3_self_crossing: bool) -> Result<netcdf::GroupMut, MatchupError> {
         let (instr_a, instr_b) = Self::instr_names(is_oco3_self_crossing);
+        log::debug!("Setting up netCDF group for {instr_a} and {instr_b}");
 
         // Make the group and variables
         let out_file = utils::nc_file(ds);
         let mut grp = if let Some(group_name) = group_name {
+            log::debug!("Adding group {group_name}");
             ds.add_group(group_name)
                 .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?
         }else{
+            log::debug!("Setting up root group");
             ds.root_mut().ok_or_else(|| MatchupError::NetcdfError { nc_error: "Cannot get root group".into(), file: Some(out_file.clone()) })?
         };
 
+        log::debug!("Adding dimensions");
         let n_groups = self.match_sets.len();
         grp.add_dimension(Self::match_group_dim(), n_groups)
             .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?;
@@ -591,6 +599,7 @@ impl OcoMatchGroups {
         ];
 
         for (varname, dims, is_float, units, descr) in var_info {
+            log::debug!("Adding variable {varname}");
             let mut var = if !is_float {
                 grp.add_variable::<u64>(&varname, dims)
                 .map_err(|e| MatchupError::from_nc_error(e, out_file.clone()))?
@@ -610,10 +619,12 @@ impl OcoMatchGroups {
             }
         }
 
+        log::debug!("Group setup complete.");
         Ok(grp)
     }
 
     fn write_file_variables(&self, grp: &mut netcdf::GroupMut, is_oco3_self_crossing: bool) -> Result<(), MatchupError> { 
+        log::debug!("Writing file variables");
         let (instr_a, instr_b) = Self::instr_names(is_oco3_self_crossing);
 
         let oco2_lite_files = self.oco2_lite_files.iter().map(|p| p.display().to_string()).collect_vec();
@@ -626,6 +637,7 @@ impl OcoMatchGroups {
         utils::write_string_nc_var(grp, &oco3_lite_files, &Self::lite_file_varname(instr_b), "oco3_lite_file", None, Some("Paths to OCO-3 lite files"))?;
         utils::write_string_nc_var(grp, &oco3_file_sha256, &Self::lite_file_sha256_varname(instr_b), "oco3_lite_file", None, Some("SHA-256 checksums of OCO-3 lite files"))?;
 
+        log::debug!("File variables written.");
         Ok(())
     }
 }
